@@ -19,7 +19,6 @@ jobs:
             echo "empty=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # multiline output
           {
             echo "body<<NEHAN_EOF"
             echo "$SUMMARY"
@@ -30,15 +29,36 @@ jobs:
 
       - name: Create GitHub Issue
         if: steps.summary.outputs.empty == 'false'
+        id: issue
         run: |
           DATE="${{ steps.summary.outputs.date }}"
           DOW=$(TZ=Asia/Tokyo date -d "$DATE" +%u 2>/dev/null || TZ=Asia/Tokyo date -j -f "%Y-%m-%d" "$DATE" +%u)
           DAYS=(日 月 火 水 木 金 土)
           TITLE="📍 nehan日報 ${DATE}（${DAYS[$DOW]}）"
-          gh issue create \
+          ISSUE_URL=$(gh issue create \
             --repo "${{ github.repository }}" \
             --title "$TITLE" \
             --body "${{ steps.summary.outputs.body }}" \
-            --label "nehan,daily-report"
+            --label "nehan,daily-report")
+          echo "url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Discord
+        if: steps.summary.outputs.empty == 'false'
+        run: |
+          curl -sf -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg title "${{ steps.issue.outputs.title }}" \
+              --arg url "${{ steps.issue.outputs.url }}" \
+              --arg body "${{ steps.summary.outputs.body }}" \
+              '{
+                embeds: [{
+                  title: $title,
+                  url: $url,
+                  description: ($body | if length > 2000 then .[:2000] + "..." else . end),
+                  color: 5814783
+                }]
+              }')"
