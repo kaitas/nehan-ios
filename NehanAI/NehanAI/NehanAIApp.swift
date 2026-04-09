@@ -5,6 +5,8 @@ import BackgroundTasks
 struct NehanAIApp: App {
     init() {
         registerBackgroundTasks()
+        scheduleSync()
+        scheduleSleepFetch()
     }
 
     var body: some Scene {
@@ -35,13 +37,17 @@ struct NehanAIApp: App {
     private func handleSleepFetch(task: BGProcessingTask) {
         task.expirationHandler = { task.setTaskCompleted(success: false) }
         Task {
+            let hk = HealthKitService.shared
             do {
-                if let sleepEntry = try await HealthKitService.shared.fetchSleepData(for: Date()) {
+                if let sleepEntry = try await hk.fetchSleepData(for: Date()) {
                     SyncService.shared.addEntry(sleepEntry)
-                    await SyncService.shared.sync()
                 }
+                if let healthEntry = try await hk.fetchDailyHealthData(for: Date()) {
+                    SyncService.shared.addEntry(healthEntry)
+                }
+                await SyncService.shared.sync()
             } catch {
-                print("[nehan] Sleep fetch error: \(error)")
+                print("[nehan] Health fetch error: \(error)")
             }
             task.setTaskCompleted(success: true)
             scheduleSleepFetch()
@@ -58,14 +64,12 @@ struct NehanAIApp: App {
     func scheduleSleepFetch() {
         let request = BGProcessingTaskRequest(identifier: "ai.aicu.nehan.sleep")
         let calendar = Calendar.current
-        var components = calendar.dateComponents([.year, .month, .day], from: Date())
-        components.hour = 7
-        components.minute = 0
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: Date()) {
-            components = calendar.dateComponents([.year, .month, .day], from: tomorrow)
+            var components = calendar.dateComponents([.year, .month, .day], from: tomorrow)
             components.hour = 7
+            components.minute = 0
+            request.earliestBeginDate = calendar.date(from: components)
         }
-        request.earliestBeginDate = calendar.date(from: components)
         try? BGTaskScheduler.shared.submit(request)
     }
 }

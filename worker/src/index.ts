@@ -77,7 +77,8 @@ async function generateDailyReport(db: D1Database, date: string): Promise<string
 
   const locations = results.filter((r: any) => r.type === 'location');
   const sleeps = results.filter((r: any) => r.type === 'sleep');
-  const memos = results.filter((r: any) => r.type === 'memo');
+  const healthMemos = results.filter((r: any) => r.type === 'memo' && (r as any).payload?.startsWith('health:'));
+  const memos = results.filter((r: any) => r.type === 'memo' && !(r as any).payload?.startsWith('health:'));
 
   let md = `# 📍 nehan日報 ${date}\n\n`;
 
@@ -87,7 +88,10 @@ async function generateDailyReport(db: D1Database, date: string): Promise<string
     for (const s of sleeps) {
       try {
         const p = JSON.parse((s as any).payload || '{}');
-        md += `- 就寝: ${p.asleep?.slice(11, 16) ?? '?'} → 起床: ${p.awake?.slice(11, 16) ?? '?'}\n`;
+        const asleepTime = p.asleep ? toJST(p.asleep) : '?';
+        const awakeTime = p.awake ? toJST(p.awake) : '?';
+        const totalH = p.totalHours ? ` (${p.totalHours}h)` : '';
+        md += `- 就寝: ${asleepTime} → 起床: ${awakeTime}${totalH}\n`;
         if (p.stages) {
           for (const st of p.stages) {
             md += `  - ${st.stage}: ${st.minutes}min\n`;
@@ -98,6 +102,22 @@ async function generateDailyReport(db: D1Database, date: string): Promise<string
       }
     }
     md += '\n';
+  }
+
+  // ヘルスデータ (歩数・心拍)
+  for (const h of healthMemos) {
+    try {
+      const json = (h as any).payload?.replace('health: ', '') ?? '{}';
+      const p = JSON.parse(json);
+      if (p.steps || p.heartRate) {
+        md += `## 🏃 アクティビティ\n`;
+        if (p.steps) md += `- 歩数: ${p.steps.toLocaleString()} 歩\n`;
+        if (p.heartRate) {
+          md += `- 心拍: 平均 ${p.heartRate.avg} bpm (↓${p.heartRate.min} ↑${p.heartRate.max})\n`;
+        }
+        md += '\n';
+      }
+    } catch { /* skip */ }
   }
 
   // 訪問場所

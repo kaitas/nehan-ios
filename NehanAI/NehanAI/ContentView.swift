@@ -6,6 +6,9 @@ struct ContentView: View {
     @StateObject private var bookmarkStore = PlaceBookmarkStore.shared
     @State private var memoText = ""
     @State private var lastSyncStatus = "未同期"
+    @State private var sleepSummary: HealthKitService.SleepSummary?
+    @State private var stepCount: Int = 0
+    @State private var heartRate: HealthKitService.HeartRateSummary?
     @State private var showingNameDialog = false
     @State private var newPlaceName = ""
     @State private var newPlaceIsSecret = false
@@ -69,6 +72,41 @@ struct ContentView: View {
                     Text("同期: \(lastSyncStatus)")
                 }
 
+                Section("ヘルスデータ") {
+                    if let sleep = sleepSummary {
+                        VStack(alignment: .leading, spacing: 4) {
+                            let hours = sleep.totalMinutes / 60
+                            let mins = sleep.totalMinutes % 60
+                            Text("睡眠: \(hours)h\(mins)m")
+                                .font(.headline)
+                            if let asleep = sleep.asleep, let awake = sleep.awake {
+                                Text("\(asleep.formatted(date: .omitted, time: .shortened)) → \(awake.formatted(date: .omitted, time: .shortened))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: 12) {
+                                Label("\(sleep.deepMinutes)m", systemImage: "moon.zzz.fill")
+                                Label("\(sleep.remMinutes)m", systemImage: "brain.head.profile")
+                                Label("\(sleep.coreMinutes)m", systemImage: "bed.double.fill")
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("睡眠データなし")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if stepCount > 0 {
+                        Label("\(stepCount.formatted()) 歩", systemImage: "figure.walk")
+                    }
+
+                    if let hr = heartRate {
+                        Label("心拍 \(hr.average) bpm (↓\(hr.min) ↑\(hr.max))", systemImage: "heart.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+
                 Section("メモ") {
                     TextField("打合せメモ、やったこと等", text: $memoText, axis: .vertical)
                         .lineLimit(3...6)
@@ -90,13 +128,21 @@ struct ContentView: View {
                         }
                     }
 
-                    Button("睡眠データ取得") {
+                    Button("ヘルスデータ取得・同期") {
                         Task {
                             do {
-                                if let entry = try await HealthKitService.shared.fetchSleepData(for: Date()) {
-                                    SyncService.shared.addEntry(entry)
-                                    lastSyncStatus = "睡眠データ追加"
+                                let hk = HealthKitService.shared
+                                var count = 0
+                                if let sleepEntry = try await hk.fetchSleepData(for: Date()) {
+                                    SyncService.shared.addEntry(sleepEntry)
+                                    count += 1
                                 }
+                                if let healthEntry = try await hk.fetchDailyHealthData(for: Date()) {
+                                    SyncService.shared.addEntry(healthEntry)
+                                    count += 1
+                                }
+                                await refreshHealthData()
+                                lastSyncStatus = count > 0 ? "ヘルスデータ \(count)件追加" : "データなし"
                             } catch {
                                 lastSyncStatus = "Error: \(error.localizedDescription)"
                             }
@@ -162,10 +208,19 @@ struct ContentView: View {
 
         Task {
             try? await HealthKitService.shared.requestPermission()
+            await refreshHealthData()
         }
 
         locationService.requestPermission()
         locationService.startTracking()
+    }
+
+    private func refreshHealthData() async {
+        let today = Date()
+        let hk = HealthKitService.shared
+        sleepSummary = try? await hk.fetchSleepSummary(for: today)
+        stepCount = (try? await hk.fetchStepCount(for: today)) ?? 0
+        heartRate = try? await hk.fetchHeartRateSummary(for: today)
     }
 }
 
