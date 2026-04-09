@@ -27,6 +27,7 @@
 		619FFDAF2F87FB0E0011EC08 /* NehanAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NehanAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		619FFDBC2F87FB0F0011EC08 /* NehanAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NehanAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		619FFDC62F87FB0F0011EC08 /* NehanAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NehanAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000012F880001SECRETS00 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -85,9 +86,18 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		AA0000022F880002CONFIG00 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000012F880001SECRETS00 /* Secrets.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		619FFDA62F87FB0E0011EC08 = {
 			isa = PBXGroup;
 			children = (
+				AA0000022F880002CONFIG00 /* Config */,
 				619FFDB12F87FB0E0011EC08 /* NehanAI */,
 				619FFDBF2F87FB0F0011EC08 /* NehanAITests */,
 				619FFDC92F87FB0F0011EC08 /* NehanAIUITests */,
@@ -405,6 +415,7 @@
 		};
 		619FFDD12F87FB0F0011EC08 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA0000012F880001SECRETS00 /* Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -439,6 +450,7 @@
 		};
 		619FFDD22F87FB0F0011EC08 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA0000012F880001SECRETS00 /* Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

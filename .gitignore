@@ -26,6 +26,9 @@ build/
 Packages/
 Package.resolved
 
+# Secrets
+Secrets.xcconfig
+
 # Cloudflare Worker
 worker/node_modules/
 worker/.wrangler/
