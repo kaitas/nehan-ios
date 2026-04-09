@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreLocation
 
 struct ContentView: View {
     @StateObject private var locationService = LocationService.shared
