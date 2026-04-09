@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>nehan.aiが訪問場所をライフログとして記録します</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>nehan.aiが現在地を記録します</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>nehan.aiが睡眠データを日報に記録します</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>ai.aicu.nehan.sync</string>
+		<string>ai.aicu.nehan.sleep</string>
+	</array>
+</dict>
+</plist>
