@@ -1,27 +1,119 @@
 # AGENTS.md — nehan.ai 実装ガイド
 
-## Phase 0: Cloudflare Worker（1日目）
+## システム概要
 
-### セットアップ
-```bash
-cd worker
-npm install
-npx wrangler d1 create nehan-db
-# wrangler.toml の database_id を更新
-npx wrangler d1 execute nehan-db --file=schema.sql
-npx wrangler secret put API_TOKEN
-npx wrangler secret put GITHUB_TOKEN
-npx wrangler deploy
-# nehan.ai の DNS に ios サブドメインを CNAME → Worker
+nehan.ai はライフログ日報システム。iOS アプリがバックグラウンドで位置情報・睡眠データ・手動メモを記録し、Cloudflare Worker (D1) に同期。毎日 23:00 JST に GitHub Actions が日報 Issue を作成し Discord に通知する。
+
+```
+┌─────────────────────┐
+│  iOS App (Swift)     │
+│  - CoreLocation      │  POST /api/log
+│  - HealthKit         │───────────────┐
+│  - BackgroundTasks   │               │
+└─────────────────────┘               ▼
+                            ┌──────────────────┐
+                            │ Cloudflare Worker │
+                            │ Hono + D1         │
+                            │                    │
+                            │ POST /api/log      │
+                            │ GET  /api/logs     │
+                            │ GET  /api/summary  │
+                            └────────┬─────────┘
+                                     │
+               ┌─────────────────────┼──────────────────────┐
+               ▼                     ▼                      ▼
+    GitHub Actions (23:00 JST)   外部 Actions          他サービス
+    → /api/summary 取得          → /api/logs 取得
+    → GitHub Issue 作成          → データ活用
+    → Discord 通知
 ```
 
-### エンドポイント
-- `POST /api/log` — バッチログ受信（Bearer Token認証）
-- `GET /api/logs?date=YYYY-MM-DD` — 日別ログ取得
-- `GET /api/summary?date=YYYY-MM-DD` — 日報Markdownプレビュー
-- **Cron** 毎日23:50 JST → GitHub Issue 日報自動生成
+## Worker API リファレンス
 
-### D1スキーマ
+### 認証
+全 `/api/*` エンドポイントは Bearer Token 認証。
+```
+Authorization: Bearer <API_TOKEN>
+```
+
+### `POST /api/log` — ログ一括登録
+```json
+{
+  "entries": [
+    {
+      "timestamp": "2026-04-10T14:30:00Z",
+      "type": "location",
+      "latitude": 35.6580,
+      "longitude": 139.7016,
+      "place_name": "渋谷ストリーム"
+    },
+    {
+      "timestamp": "2026-04-09T21:00:00Z",
+      "type": "sleep",
+      "payload": "{\"asleep\":\"2026-04-09T14:30:00Z\",\"awake\":\"2026-04-09T21:00:00Z\",\"stages\":[{\"stage\":\"deep\",\"minutes\":90},{\"stage\":\"rem\",\"minutes\":60},{\"stage\":\"core\",\"minutes\":180},{\"stage\":\"awake\",\"minutes\":15}]}"
+    },
+    {
+      "timestamp": "2026-04-10T01:00:00Z",
+      "type": "memo",
+      "payload": "Jerry Chiと打合せ@渋谷ストリーム"
+    }
+  ]
+}
+```
+
+**レスポンス**: `{"ok": true, "count": 3}`
+
+| フィールド | 型 | 必須 | 説明 |
+|---|---|---|---|
+| `timestamp` | string (ISO8601) | Yes | UTC推奨。JST offset付きも可 |
+| `type` | `"location"` \| `"sleep"` \| `"memo"` | Yes | ログ種別 |
+| `latitude` | number | No | 緯度 (location用) |
+| `longitude` | number | No | 経度 (location用) |
+| `place_name` | string | No | 地名 (逆ジオコーディング結果) |
+| `payload` | string | No | 任意データ (sleep: JSON, memo: テキスト) |
+
+### `GET /api/logs?date=YYYY-MM-DD` — 日別ログ取得
+日付は **JST** 基準。`date(timestamp, '+9 hours')` で比較。
+
+**レスポンス例**:
+```json
+{
+  "results": [
+    {
+      "id": 1,
+      "timestamp": "2026-04-10T01:00:00Z",
+      "type": "memo",
+      "latitude": null,
+      "longitude": null,
+      "place_name": null,
+      "payload": "テスト投稿",
+      "synced_from": "ios",
+      "created_at": "2026-04-10 00:12:00"
+    }
+  ],
+  "success": true
+}
+```
+
+### `GET /api/summary?date=YYYY-MM-DD` — 日報 Markdown 取得
+日付は **JST** 基準。日報の Markdown テキストを返す。データなしの場合は空文字。
+
+**他の GitHub Actions からの利用例**:
+```bash
+# 特定日のログを JSON で取得
+curl -H "Authorization: Bearer $NEHAN_API_TOKEN" \
+  "$NEHAN_WORKER_URL/api/logs?date=2026-04-10"
+
+# 日報 Markdown を取得
+curl -H "Authorization: Bearer $NEHAN_API_TOKEN" \
+  "$NEHAN_WORKER_URL/api/summary?date=2026-04-10"
+```
+
+GitHub Actions から使う場合、リポジトリの Secrets に以下を設定:
+- `NEHAN_API_TOKEN` — Bearer Token
+- `NEHAN_WORKER_URL` — `https://nehan-worker.aki-2c0.workers.dev`
+
+### D1 スキーマ
 ```sql
 CREATE TABLE IF NOT EXISTS logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,49 +123,35 @@ CREATE TABLE IF NOT EXISTS logs (
   longitude REAL,
   place_name TEXT,
   payload TEXT,
+  synced_from TEXT DEFAULT 'ios',
   created_at TEXT DEFAULT (datetime('now'))
 );
+
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_logs_type ON logs(type);
+CREATE INDEX IF NOT EXISTS idx_logs_date ON logs(date(timestamp));
 ```
 
-### POST /api/log リクエスト
-```json
-{
-  "entries": [
-    {
-      "timestamp": "2026-04-10T14:30:00+09:00",
-      "type": "location",
-      "latitude": 35.6580,
-      "longitude": 139.7016,
-      "place_name": "渋谷ストリーム"
-    },
-    {
-      "timestamp": "2026-04-10T06:00:00+09:00",
-      "type": "sleep",
-      "payload": "{\"asleep\":\"2026-04-09T23:30:00+09:00\",\"awake\":\"2026-04-10T06:00:00+09:00\",\"stages\":[{\"stage\":\"deep\",\"minutes\":90},{\"stage\":\"rem\",\"minutes\":60},{\"stage\":\"core\",\"minutes\":180}]}"
-    },
-    {
-      "timestamp": "2026-04-10T10:00:00+09:00",
-      "type": "memo",
-      "payload": "Jerry Chiと打合せ@渋谷ストリーム"
-    }
-  ]
-}
-```
+**注意**: 日付検索は `date(timestamp, '+9 hours')` で JST 変換して比較する。
 
-### GitHub Issue 日報テンプレート
-タイトル: `📍 nehan日報 2026-04-10（金）`
+### 日報出力例
+タイトル: `📍 nehan日報 2026-04-10（木）`
 ```markdown
+# 📍 nehan日報 2026-04-10
+
 ## 🛏️ 睡眠
-- 就寝: 23:30 → 起床: 06:00（6.5h）
-- Deep: 90min / REM: 60min / Core: 180min
+- 就寝: 23:30 → 起床: 06:00
+  - deep: 90min
+  - rem: 60min
+  - core: 180min
+  - awake: 15min
 
 ## 📍 訪問場所
 | 時刻 | 場所 | 座標 |
 |------|------|------|
-| 09:15 | 自宅出発 | 35.xxxx, 139.xxxx |
-| 10:00 | 渋谷ストリーム | 35.6580, 139.7016 |
+| 09:15 | 自宅付近 | 35.xxxx, 139.xxxx |
+| 10:00 | 渋谷ストリーム, 渋谷区 | 35.6580, 139.7016 |
+| 18:30 | 自宅付近 | 35.xxxx, 139.xxxx |
 
 ## 📝 メモ
 - 10:00 Jerry Chiと打合せ@渋谷ストリーム
@@ -82,85 +160,115 @@ CREATE INDEX IF NOT EXISTS idx_logs_type ON logs(type);
 *Generated by nehan.ai*
 ```
 
-## Phase 1: iOS App（2-3日目）
+## GitHub Actions — 日報自動生成
 
-### プロジェクト情報
-- **Bundle ID**: `ai.nehan.ios`
-- **Xcode**: New Project → App → SwiftUI → Swift
-- **Capabilities**: Background Modes (Location updates, Background fetch, Background processing), HealthKit
-- **Info.plist**: `NSLocationAlwaysAndWhenInUseUsageDescription`, `NSLocationWhenInUseUsageDescription`, `NSHealthShareUsageDescription`, `BGTaskSchedulerPermittedIdentifiers`
+### `.github/workflows/daily-report.yml`
+- **スケジュール**: 毎日 23:00 JST (14:00 UTC)
+- **手動実行**: `workflow_dispatch` 対応
+- **処理フロー**:
+  1. Worker `/api/summary?date=<JST今日>` から Markdown 取得
+  2. 空でなければ GitHub Issue 作成 (ラベル: `nehan`, `daily-report`)
+  3. Discord Webhook で通知 (embed形式)
 
-### ファイル構成
+### 必要な GitHub Secrets
+| Secret | 用途 |
+|---|---|
+| `NEHAN_API_TOKEN` | Worker API 認証用 Bearer Token |
+| `NEHAN_WORKER_URL` | Worker の URL |
+| `DISCORD_WEBHOOK_URL` | Discord 通知用 Webhook |
+
+## iOS App
+
+### プロジェクト構成
 ```
 NehanAI/
-├── App/
-│   ├── NehanAIApp.swift          -- @main, BGTaskScheduler登録
-│   └── ContentView.swift         -- メイン画面（ステータス、手動メモ）
-├── Services/
-│   ├── LocationService.swift     -- CLLocationManager, significantLocationChanges
-│   ├── HealthKitService.swift    -- HKHealthStore, 睡眠データ取得
-│   └── SyncService.swift         -- バッファ管理 → Worker POST
-├── Models/
-│   └── LogEntry.swift            -- Codable struct + API変換
+├── NehanAI.xcodeproj/
 ├── Config/
-│   └── AppConfig.swift           -- Worker URL, API Token
-└── Info.plist                    -- 権限説明文, BGTask ID
+│   ├── Secrets.xcconfig           -- API_TOKEN, WORKER_URL (gitignored)
+│   └── Secrets.xcconfig.example   -- テンプレート (committed)
+├── NehanAI/
+│   ├── NehanAIApp.swift           -- @main, BGTaskScheduler登録
+│   ├── ContentView.swift          -- メイン画面 (ステータス, メモ入力, 同期)
+│   ├── NehanAI.entitlements       -- HealthKit entitlement
+│   ├── Info.plist                 -- 権限説明文, BGTask ID, xcconfig変数展開
+│   ├── Config/
+│   │   └── AppConfig.swift        -- Bundle.main から WORKER_URL, API_TOKEN 読み取り
+│   ├── Models/
+│   │   └── LogEntry.swift         -- Codable struct + API変換
+│   ├── Services/
+│   │   ├── LocationService.swift  -- CLLocationManager + MKReverseGeocodingRequest
+│   │   ├── HealthKitService.swift -- HKHealthStore 睡眠データ取得
+│   │   └── SyncService.swift      -- バッファ管理 → Worker POST
+│   └── Assets.xcassets/
+├── NehanAITests/
+└── NehanAIUITests/
 ```
 
-### 主要コンポーネント仕様
+### Xcode Capabilities
+- **Background Modes**: Location updates, Background fetch, Background processing
+- **HealthKit**: 睡眠データ読み取り
 
-**LocationService**
-- `startMonitoringSignificantLocationChanges()` でバックグラウンド記録（省電力、数百m移動で発火）
-- 新規位置 → CLGeocoder逆ジオコーディング → LogEntry生成 → SyncService.addEntry
-- `allowsBackgroundLocationUpdates = true`
+### シークレット管理
+`Secrets.xcconfig` → Info.plist `$(変数)` 展開 → `Bundle.main` 読み取り。
+xcconfig はプロジェクトの Debug/Release 両方の `baseConfigurationReference` に設定済み。
+
+```
+Secrets.xcconfig (gitignored)     →  Info.plist $(API_TOKEN)  →  AppConfig.swift Bundle.main
+API_TOKEN = xxxx                      <key>API_TOKEN</key>        static let apiToken = Bundle...
+WORKER_URL = https://...              <string>$(API_TOKEN)</string>
+```
+
+### 主要コンポーネント
+
+**LocationService** (`@MainActor`, `ObservableObject`)
+- `startMonitoringSignificantLocationChanges()` — 省電力、数百m移動で発火
+- `MKReverseGeocodingRequest` → `MKMapItem.address.shortAddress` で地名取得
+- `allowsBackgroundLocationUpdates = true`, `showsBackgroundLocationIndicator = true`
 
 **HealthKitService**
 - `HKCategoryType.sleepAnalysis` 読み取り
-- BGTaskScheduler 毎朝7:00に前夜の睡眠を取得
+- 前日 20:00〜当日 12:00 の範囲で睡眠サンプルを検索
 - stages: asleepDeep, asleepREM, asleepCore, awake の分数を集計
+- BGTaskScheduler 毎朝 7:00 に自動取得
 
 **SyncService**
 - インメモリバッファに LogEntry を蓄積
-- 50件 or 手動 or BGTask で `POST /api/log` にバッチ送信
-- 失敗時はバッファに戻してリトライ
+- 50件到達 or 手動 or BGTask で `POST /api/log` にバッチ送信
+- 失敗時はバッファ先頭に戻してリトライ
 
-**ContentView**
-- 記録中/停止中ステータス表示
-- 手動メモ入力欄（打合せ内容等）
-- 「今すぐ同期」「睡眠データ取得」ボタン
-
-### iOS→Worker認証
-```swift
-// AppConfig.swift
-enum AppConfig {
-    static let workerURL = "https://ios.nehan.ai"
-    static let apiToken = "YOUR_TOKEN"  // wrangler secret put API_TOKEN と同じ値
-}
+## Worker セットアップ手順
+```bash
+cd worker
+npm install
+npx wrangler d1 create nehan-db
+# wrangler.toml の database_id を更新
+npx wrangler d1 execute nehan-db --remote --file=schema.sql
+echo "<your-token>" | npx wrangler secret put API_TOKEN
+npx wrangler deploy
 ```
-
-## Phase 2: OpenClaw連携（4-5日目）
-- OpenClaw にnehanスキル追加
-- `GET https://ios.nehan.ai/api/logs?date=today` でデータ取得
-- 日報ドラフト生成、Gmail予定との突合
-- GitHub Issue をOpenClawの入力ソースとして活用
 
 ## デプロイチェックリスト
 
 ### Worker
-- [ ] `wrangler d1 create nehan-db`
-- [ ] `schema.sql` 実行
-- [ ] `wrangler secret put API_TOKEN`
-- [ ] `wrangler secret put GITHUB_TOKEN`
-- [ ] `wrangler deploy`
-- [ ] nehan.ai DNS: `ios` CNAME → Worker
-- [ ] curl でPOST/GETテスト
+- [x] D1 データベース作成 (nehan-db, APAC)
+- [x] schema.sql 実行
+- [x] `wrangler secret put API_TOKEN`
+- [x] `wrangler deploy`
+- [ ] カスタムドメイン: `ios.nehan.ai` → Worker ルーティング
 
 ### iOS
-- [ ] Xcode Capabilities: Background Modes + HealthKit
-- [ ] Info.plist 権限文言
-- [ ] AppConfig.swift にURL・トークン設定
-- [ ] 実機ビルド（Ad Hoc / 開発者署名）
+- [x] Xcode Capabilities: Background Modes + HealthKit
+- [x] Info.plist 権限説明文 + BGTask ID
+- [x] Secrets.xcconfig で API_TOKEN / WORKER_URL 管理
+- [x] 実機ビルド成功
 - [ ] 位置情報「常に許可」確認
-- [ ] HealthKit許可確認
-- [ ] バックグラウンドで位置記録されるか確認
-- [ ] Worker にログ到達確認
+- [ ] HealthKit 許可確認
+- [ ] バックグラウンド位置記録確認
+- [ ] Worker へのログ到達確認
+
+### GitHub Actions
+- [x] `NEHAN_API_TOKEN` Secret 設定
+- [x] `NEHAN_WORKER_URL` Secret 設定
+- [x] `DISCORD_WEBHOOK_URL` Secret 設定
+- [x] daily-report.yml デプロイ
+- [x] Discord 通知テスト成功
