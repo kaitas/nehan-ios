@@ -1,13 +1,13 @@
 import Foundation
 import Combine
 import CoreLocation
+import MapKit
 
 @MainActor
 class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = LocationService()
 
     private let manager = CLLocationManager()
-    private let geocoder = CLGeocoder()
 
     @Published var lastLocation: CLLocation?
     @Published var isTracking = false
@@ -59,10 +59,11 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     private func reverseGeocode(_ location: CLLocation) async -> String? {
+        guard let request = MKReverseGeocodingRequest(location: location) else { return nil }
         do {
-            let placemarks = try await geocoder.reverseGeocodeLocation(location)
-            if let p = placemarks.first {
-                return [p.name, p.locality].compactMap { $0 }.joined(separator: ", ")
+            let mapItems = try await request.mapItems
+            if let item = mapItems.first {
+                return item.address?.shortAddress ?? item.name
             }
         } catch {
             print("[nehan] Geocode error: \(error)")
