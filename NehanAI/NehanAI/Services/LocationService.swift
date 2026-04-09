@@ -42,12 +42,27 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         Task { @MainActor in
             self.lastLocation = location
 
+            let lat = location.coordinate.latitude
+            let lon = location.coordinate.longitude
+
+            // ブックマーク照合
+            if let bookmark = PlaceBookmarkStore.shared.match(latitude: lat, longitude: lon) {
+                let entry = LogEntry(
+                    type: .location,
+                    latitude: bookmark.isSecret ? nil : lat,
+                    longitude: bookmark.isSecret ? nil : lon,
+                    placeName: bookmark.name
+                )
+                self.onNewLocation?(entry)
+                return
+            }
+
             let placeName = await self.reverseGeocode(location)
 
             let entry = LogEntry(
                 type: .location,
-                latitude: location.coordinate.latitude,
-                longitude: location.coordinate.longitude,
+                latitude: lat,
+                longitude: lon,
                 placeName: placeName
             )
             self.onNewLocation?(entry)
