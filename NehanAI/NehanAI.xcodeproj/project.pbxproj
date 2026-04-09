@@ -86,14 +86,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		AA0000022F880002CONFIG00 /* Config */ = {
-			isa = PBXGroup;
-			children = (
-				AA0000012F880001SECRETS00 /* Secrets.xcconfig */,
-			);
-			path = Config;
-			sourceTree = "<group>";
-		};
 		619FFDA62F87FB0E0011EC08 = {
 			isa = PBXGroup;
 			children = (
@@ -113,6 +105,14 @@
 				619FFDC62F87FB0F0011EC08 /* NehanAIUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		AA0000022F880002CONFIG00 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000012F880001SECRETS00 /* Secrets.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
