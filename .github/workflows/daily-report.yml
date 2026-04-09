@@ -2,7 +2,7 @@ name: Daily Report
 
 on:
   schedule:
-    - cron: '50 14 * * *'  # 23:50 JST
+    - cron: '0 14 * * *'  # 23:00 JST
   workflow_dispatch:  # 手動実行用
 
 jobs:

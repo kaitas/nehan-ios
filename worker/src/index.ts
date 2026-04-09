@@ -45,7 +45,7 @@ app.post('/api/log', async (c) => {
 app.get('/api/logs', async (c) => {
   const date = c.req.query('date') ?? new Date().toISOString().slice(0, 10);
   const results = await c.env.DB.prepare(
-    "SELECT * FROM logs WHERE date(timestamp) = ? ORDER BY timestamp ASC"
+    "SELECT * FROM logs WHERE date(timestamp, '+9 hours') = ? ORDER BY timestamp ASC"
   ).bind(date).all();
   return c.json(results);
 });
@@ -59,9 +59,18 @@ app.get('/api/summary', async (c) => {
 
 export default app;
 
+function toJST(ts: string): string {
+  try {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch {
+    return ts?.slice(11, 16) ?? '?';
+  }
+}
+
 async function generateDailyReport(db: D1Database, date: string): Promise<string> {
   const { results } = await db.prepare(
-    "SELECT * FROM logs WHERE date(timestamp) = ? ORDER BY timestamp ASC"
+    "SELECT * FROM logs WHERE date(timestamp, '+9 hours') = ? ORDER BY timestamp ASC"
   ).bind(date).all();
 
   if (!results?.length) return '';
@@ -96,7 +105,7 @@ async function generateDailyReport(db: D1Database, date: string): Promise<string
     md += `## 📍 訪問場所\n`;
     md += `| 時刻 | 場所 | 座標 |\n|------|------|------|\n`;
     for (const l of locations) {
-      const time = (l as any).timestamp?.slice(11, 16) ?? '?';
+      const time = toJST((l as any).timestamp);
       const place = (l as any).place_name || `${(l as any).latitude?.toFixed(4)}, ${(l as any).longitude?.toFixed(4)}`;
       const coord = `${(l as any).latitude?.toFixed(4)}, ${(l as any).longitude?.toFixed(4)}`;
       md += `| ${time} | ${place} | ${coord} |\n`;
@@ -108,7 +117,7 @@ async function generateDailyReport(db: D1Database, date: string): Promise<string
   if (memos.length > 0) {
     md += `## 📝 メモ\n`;
     for (const m of memos) {
-      const time = (m as any).timestamp?.slice(11, 16) ?? '?';
+      const time = toJST((m as any).timestamp);
       md += `- ${time} ${(m as any).payload || ''}\n`;
     }
     md += '\n';
