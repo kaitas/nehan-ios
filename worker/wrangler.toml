@@ -2,13 +2,13 @@ name = "nehan-worker"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
-[triggers]
-crons = ["50 14 * * *"]  # 23:50 JST
+# [triggers]
+# crons = ["50 14 * * *"]  # 23:50 JST — Free plan cron limit reached, enable after cleanup
 
 [[d1_databases]]
 binding = "DB"
 database_name = "nehan-db"
-database_id = "TODO_REPLACE"
+database_id = "5b746e48-0a3b-41f4-8e93-8f1c1cb1bdc8"
 
 [vars]
 GITHUB_REPO = "aicuai/nehan-ai"
