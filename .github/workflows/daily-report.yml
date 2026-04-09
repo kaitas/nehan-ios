@@ -1,0 +1,44 @@
+name: Daily Report
+
+on:
+  schedule:
+    - cron: '50 14 * * *'  # 23:50 JST
+  workflow_dispatch:  # 手動実行用
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get daily summary from Worker
+        id: summary
+        run: |
+          DATE=$(TZ=Asia/Tokyo date +%Y-%m-%d)
+          SUMMARY=$(curl -sf -H "Authorization: Bearer ${{ secrets.NEHAN_API_TOKEN }}" \
+            "${{ secrets.NEHAN_WORKER_URL }}/api/summary?date=$DATE")
+          if [ -z "$SUMMARY" ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # multiline output
+          {
+            echo "body<<NEHAN_EOF"
+            echo "$SUMMARY"
+            echo "NEHAN_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "empty=false" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Issue
+        if: steps.summary.outputs.empty == 'false'
+        run: |
+          DATE="${{ steps.summary.outputs.date }}"
+          DOW=$(TZ=Asia/Tokyo date -d "$DATE" +%u 2>/dev/null || TZ=Asia/Tokyo date -j -f "%Y-%m-%d" "$DATE" +%u)
+          DAYS=(日 月 火 水 木 金 土)
+          TITLE="📍 nehan日報 ${DATE}（${DAYS[$DOW]}）"
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "$TITLE" \
+            --body "${{ steps.summary.outputs.body }}" \
+            --label "nehan,daily-report"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

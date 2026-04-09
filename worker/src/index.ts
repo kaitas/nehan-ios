@@ -4,8 +4,6 @@ import { bearerAuth } from 'hono/bearer-auth';
 type Bindings = {
   DB: D1Database;
   API_TOKEN: string;
-  GITHUB_TOKEN: string;
-  GITHUB_REPO: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -59,36 +57,7 @@ app.get('/api/summary', async (c) => {
   return c.text(markdown);
 });
 
-// Cron handler — GitHub Issue 日報生成
-export default {
-  fetch: app.fetch,
-  async scheduled(event: ScheduledEvent, env: Bindings) {
-    // 23:50 JST = 14:50 UTC → 今日の日報
-    const now = new Date();
-    const jstDate = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-    const date = jstDate.toISOString().slice(0, 10);
-
-    const markdown = await generateDailyReport(env.DB, date);
-    if (!markdown) return;
-
-    const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][jstDate.getDay()];
-    const title = `📍 nehan日報 ${date}（${dayOfWeek}）`;
-
-    await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/issues`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'nehan-ai-worker',
-      },
-      body: JSON.stringify({
-        title,
-        body: markdown,
-        labels: ['nehan', 'daily-report'],
-      }),
-    });
-  },
-};
+export default app;
 
 async function generateDailyReport(db: D1Database, date: string): Promise<string> {
   const { results } = await db.prepare(
