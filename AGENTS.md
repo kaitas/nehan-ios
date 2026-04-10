@@ -246,6 +246,19 @@ enum Category: String, Codable, CaseIterable {
 | DNS | `nehan.ai` CNAME → Worker | — |
 | DNS | `ios.nehan.ai` CNAME → Worker | — |
 
+### Google Analytics 4 (GA4)
+| 項目 | 値 |
+|------|-----|
+| 測定ID | `G-NHJNT7G479` |
+| ストリーム名 | nehan.ai Web |
+| ストリームURL | https://nehan.ai |
+| ストリームID | 14348007420 |
+| ダッシュボード | https://analytics.google.com/ |
+
+タグ挿入箇所:
+- `worker/public/index.html` — LP `<head>` 内
+- `worker/src/index.ts` — `pageLayout()` `<head>` 内（全公開ページ共通）
+
 ### デプロイフロー
 ```bash
 cd worker
@@ -334,7 +347,7 @@ Secret: `DISCORD_WEBHOOK_URL`
 | 項目 | 状態 | 詳細 |
 |------|------|------|
 | Per-user認証 | 🔴 未着手 | §セキュリティ Phase 1 |
-| GA4トラッキング | 🔴 未着手 | LP・ブログページにGA4タグ挿入 |
+| GA4トラッキング | ✅ 完了 | `G-NHJNT7G479` — §DevOps GA4セクション参照 |
 | Resendメール認証 | 🔴 未着手 | §セキュリティ Phase 2 |
 | 静的サイト生成 | 🟡 設計中 | MkDocs Material + Cloudflare Pages |
 | WeatherKit | ⏸️ ブロック | Apple Developer Program登録待ち |
