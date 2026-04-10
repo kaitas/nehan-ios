@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var showingNameDialog = false
     @State private var newPlaceName = ""
     @State private var newPlaceIsSecret = false
+    @State private var newPlaceCategory: PlaceBookmark.Category = .other
     @State private var showingBookmarks = false
     @State private var blogEntry = BlogEntry()
     @State private var isGeneratingBlog = false
@@ -48,6 +49,7 @@ struct ContentView: View {
                 CoordMemoEditSheet(
                     name: $newPlaceName,
                     isSecret: $newPlaceIsSecret,
+                    category: $newPlaceCategory,
                     onSave: { saveCoordMemo(); showingNameDialog = false },
                     onCancel: { showingNameDialog = false }
                 )
@@ -159,7 +161,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private var headerTrailing: some View {
-        EmptyView()
+        let username = profileStore.profile.displayName.isEmpty
+            ? "user"
+            : profileStore.profile.displayName
+        Link("/\(username)", destination: URL(string: "https://nehan.ai/\(username)")!)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
     }
 
     /// Generate context-aware message based on time, location, health data
@@ -623,17 +630,20 @@ struct ContentView: View {
             var updated = existing
             updated.name = newPlaceName
             updated.isSecret = newPlaceIsSecret
+            updated.category = newPlaceCategory
             bookmarkStore.update(updated)
         } else {
             bookmarkStore.add(PlaceBookmark(
                 name: newPlaceName,
                 latitude: coord.latitude,
                 longitude: coord.longitude,
-                isSecret: newPlaceIsSecret
+                isSecret: newPlaceIsSecret,
+                category: newPlaceCategory
             ))
         }
         newPlaceName = ""
         newPlaceIsSecret = false
+        newPlaceCategory = .other
     }
 
     private func setupServices() {
@@ -783,38 +793,33 @@ struct TimelineBarView: View {
 struct CoordMemoEditSheet: View {
     @Binding var name: String
     @Binding var isSecret: Bool
+    @Binding var category: PlaceBookmark.Category
     var onSave: () -> Void
     var onCancel: () -> Void
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                TextField("名前 (例: 自宅, オフィス)", text: $name)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.body)
+            Form {
+                Section("場所の名前") {
+                    TextField("名前を入力", text: $name)
+                }
 
-                Toggle(isOn: $isSecret) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Label("秘密", systemImage: "lock.fill")
-                            .font(.subheadline)
-                        Text("座標を記録せずに \"Unknown\" としてクラウドに保存")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                Section("カテゴリー") {
+                    Picker("カテゴリー", selection: $category) {
+                        ForEach(PlaceBookmark.Category.allCases) { cat in
+                            Label(cat.rawValue, systemImage: cat.icon)
+                                .tag(cat)
+                        }
                     }
+                    .pickerStyle(.menu)
                 }
-                .tint(.orange)
 
-                Button(action: onSave) {
-                    Text("保存")
-                        .frame(maxWidth: .infinity)
-                        .glassEffect()
+                Section {
+                    Toggle("住所を非表示にする", isOn: $isSecret)
+                } footer: {
+                    Text("ONにすると、ブログや日報に座標・住所が表示されず、登録した名前のみが使用されます。")
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(name.isEmpty)
-
-                Spacer()
             }
-            .padding()
             .navigationTitle("座標メモ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -823,6 +828,10 @@ struct CoordMemoEditSheet: View {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
                     }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存", action: onSave)
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
@@ -837,6 +846,7 @@ struct CoordMemoListView: View {
     @State private var editingBookmark: PlaceBookmark?
     @State private var editName = ""
     @State private var editIsSecret = false
+    @State private var editCategory: PlaceBookmark.Category = .other
 
     private static let dtFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -873,6 +883,7 @@ struct CoordMemoListView: View {
                                 .onTapGesture {
                                     editName = bookmark.name
                                     editIsSecret = bookmark.isSecret
+                                    editCategory = bookmark.category
                                     editingBookmark = bookmark
                                 }
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -909,10 +920,12 @@ struct CoordMemoListView: View {
                 CoordMemoEditSheet(
                     name: $editName,
                     isSecret: $editIsSecret,
+                    category: $editCategory,
                     onSave: {
                         if var bm = editingBookmark {
                             bm.name = editName
                             bm.isSecret = editIsSecret
+                            bm.category = editCategory
                             store.update(bm)
                         }
                         editingBookmark = nil
@@ -927,9 +940,20 @@ struct CoordMemoListView: View {
 
     private func coordMemoRow(_ bookmark: PlaceBookmark) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
+            HStack(spacing: 8) {
+                Image(systemName: bookmark.category.icon)
+                    .font(.subheadline)
+                    .foregroundStyle(.purple)
+                    .frame(width: 24)
                 Text(bookmark.name)
                     .font(.headline)
+                Text(bookmark.category.rawValue)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary)
+                    .clipShape(Capsule())
                 if bookmark.isSecret {
                     Image(systemName: "lock.fill")
                         .font(.caption)

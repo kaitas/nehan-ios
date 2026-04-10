@@ -1,117 +1,100 @@
-# 2026-04-11: オンボーディング・ライフログUI・ブログ・座標メモ・全Issue実装
+# 2026-04-11: LP刷新・利用規約多言語化・ブログURL変更・座標メモカテゴリ・セキュリティ監査
 
 ## 概要
-App Store審査に向けたオンボーディングフロー構築、Glass UIへの全面移行、ライフログタイムライン、ブログ自動生成・ストリーク機能、座標メモ機能、夢日記を実装。さらに全GitHub Issue（#2〜#9）を実装完了。
+App Store審査に向けたLP（ランディングページ）の大幅刷新、プライバシーポリシー・利用規約の多言語対応、ブログURLのルートレベル化、予約ユーザー名テーブル、カバーアートR2アップロード、座標メモカテゴリ追加、カスタムドメイン設定、セキュリティ監査を実施。
 
 ## 実施内容
 
-### オンボーディング (OnboardingView) — Glass UI
-- **Glass UI**: 紫ベタ塗りから `ultraThinMaterial` ベースに全面移行
-- **4ステップフロー**: ウェルカム → 言語選択 → プロフィール → 利用規約
-- **プロフィール画面**:
-  - 生まれた年 + 誕生日（月/日ピッカー）
-  - 説明: 「年齢認証、ヘルスケアデータの分析と誕生日サプライズに使用します」
-  - 性別選択（女性→生理周期記録有効化の案内）
-  - **座標メモ説明**: GPSの値や住所を表示せずに座標メモで記録可能、プライバシー保護にも活用
-  - **地名記録チェックボックス**: `recordPlaceNames` 設定
-- **利用規約画面**: SFSafariViewControllerで表示→閉じたら自動チェックON。両方確認で同意ボタン有効化
+### LP刷新 (`worker/public/index.html`)
+- **6つの特徴カード**: 日報自動作成 / 健康管理 / 家族安否確認 / Apple Intelligence / API連携(有料) / ゲーミフィケーション
+- **「使い方」3ステップセクション**: インストール → 日常生活 → 日報自動完成
+- **フッター**: プライバシーポリシー・利用規約リンク、AICU Inc.クレジット
+- デザイン: 紫ベース(`#4B0082`)グラデーション維持
 
-### ContentView 全面リニューアル
-**ヘッダーセクション**:
-- Image Playground表情画像 (iOS 18+) / プレースホルダー(1:1)
-- コンテキストメッセージ（時刻・場所・睡眠・歩数に応じた挨拶）
-- 天気表示（WeatherKit有効化後）
-- 日付 + ストリーク(flame.fill) + タップでヘルプポップオーバー
+### 利用規約・プライバシーポリシー多言語化
+- **URL構造変更**: `/privacy` → `/terms/privacy/:lang`, `/terms` → `/terms/tos/:lang`
+- **301リダイレクト**: 旧URL → 新URL（日本語デフォルト）
+- **言語切替UI**: `langSwitcher()` ヘルパーで ja/en トグル
+- **プライバシーポリシー**: corp.aicu.ai 参照、privacy@aicu.ai 連絡先、HealthKit・位置情報・R2ストレージ説明
+- **利用規約**: ユーザー名ルール（第2条/第3条）、メール認証、無償ユーザー制限
 
-**ステータス（2行構成）**:
-- Row 1: 記録中/停止中 + バッファ件数(小さくカプセル) + 最終同期HH:mm
-- Row 2: GPS精度アイコン(色分け±Xm) + 座標メモ名(ブックマーク時は座標非表示)
+### ブログURL変更
+- `/blog/:username` → `/:username` （ルートレベル）
+- `/blog/:username/:date` → `/:username/:date`
+- `.md`/`.png` ファイル配信: `/:username/YYMMDD.md`, `/:username/YYMMDD.png`
+- **ルート順序**: 正規表現ファイルルート → catch-all（順序重要）
 
-**ライフログセクション（旧ヘルスデータ）**:
-- **288セルタイムライン**: 00:00〜23:55を5分刻みで可視化
-  - 🟣 睡眠 / 🟦 活動 / 🟡 静止 / グレー=未記録
-  - 時刻ラベル(0, 6, 12, 18, 24)
-  - 凡例表示
-- モノクロアイコンでサマリー（睡眠、歩数、心拍、生理周期）
-- 睡眠詳細（就寝→起床、deep/rem/core）
+### 予約ユーザー名テーブル (`migrations/0002_usernames.sql`)
+- 202件の禁止ユーザー名（admin, root, api, blog, nehan, aicu, hakase等）
+- `reserved_usernames` テーブル（D1）
+- `GET /api/username/check?name=xxx` — ユーザー名利用可否チェックAPI
+- ルール: 3-12文字、小文字英数字+アンダースコア+ハイフン、メール認証後変更不可（無償）
 
-**ブログセクション（大幅リニューアル）**:
-- **構造化エディタ**: BlogEditorView with 6フィールド
-  1. 日付・天気・ヘルスサマリー (sun.max)
-  2. 睡眠情報 (moon.zzz)
-  3. 夢日記 (moon.stars)
-  4. 訪問場所 (mappin.and.ellipse)
-  5. 今日の感想 (face.smiling)
-  6. やり残し (checklist)
-- ヘッダーに「N時に自動投稿」表示
-- プレビュータップでエディタsheet起動
-- リロード🔁はエディタ内に配置
-- Foundation Models (iOS 26+) で感想欄をLLM自動生成
-- **自動パブリッシュ**: BGTaskでblogPublishHour時に `POST /api/blog` → Worker
-- ストリーク表示（ヘッダー）
-- footer: 「24時間に1回ブログを書くとストリーク獲得」
+### カバーアートR2アップロード
+- `POST /api/blog/cover` — multipart/base64 PNG → R2 (`nehan-covers`バケット)
+- `BlogPublishService.uploadCover()` — iOS側マルチパートフォームアップロード
+- Image Playground 1:1出力 → `UIImage.croppedTo16x9()` センタークロップ
 
-**操作セクション**:
-- 同期 + 最終同期HH:mm
-- ヘルスデータ取得 + 開始/停止ボタン(play/pause) + 最終更新HH:mm
-- 座標メモ一覧
+### ブログリスト改善
+- 日付重複なし（UNIQUE制約）
+- タイトル + 最終更新 YYMMDD hh:mm の2行表示
+- 右側に16:9サムネイル（96x54px）
 
-### 名称変更
-- 「ブックマーク」→「座標メモ」（全UI・ダイアログ・リスト画面）
-- 「ヘルスデータ」→「ライフログ」
-- `BookmarkListView` → `CoordMemoListView`
+### 座標メモカテゴリ追加 (`PlaceBookmark.swift`)
+- `Category` enum: 自宅(house.fill) / 職場(building.2.fill) / 自席(desktopcomputer) / 寝室(bed.double.fill) / その他(mappin)
+- ContentView: カテゴリ選択Picker、リスト表示にアイコン+ラベルカプセル
+- `saveCoordMemo()` にカテゴリ引数追加
 
-### UserProfile拡張
-- `recordPlaceNames: Bool` — 地名の自動記録設定
-- `birthMonth`, `birthDay` — 誕生日（サプライズ用）
-- `blogPublishHour` — 自動パブリッシュ時刻（デフォルト20時）
-- `currentStreak`, `lastBlogDate` — ストリーク管理
-- `displayName: String` — ユーザー表示名（ブログのusernameに使用）
+### カスタムドメイン設定
+- `nehan.ai/*` → LP・ブログ・利用規約
+- `ios.nehan.ai/*` → API エンドポイント
+- Cloudflare DNS API でCNAMEレコード追加
+- `wrangler.toml` にルート設定
+- CLAUDE.md / AGENTS.md のWorker URL更新
 
-### Worker
-- `/privacy`, `/terms`, `/dashboard` ルート
-- LP刷新
-- **NEW: `POST /api/blog`** — ブログ投稿API（認証必須）
-- **NEW: `GET /blog/:username`** — ユーザーのブログ一覧
-- **NEW: `GET /blog/:username/:date`** — 個別ブログ表示（Markdown→HTML）
-- D1 `blogs` テーブル（migrations/0001_blogs.sql）
-- シンプルMarkdown→HTMLレンダラー（見出し、リスト、リンク、画像、太字、斜体、コード）
+### iOS ヘッダーリンク
+- 「nehan.ai」タイトル右に `/{username}` リンク追加
+- タップでブラウザで `https://nehan.ai/{username}` を開く
 
-### iOS新ファイル
-- `BlogEditorView.swift` — 構造化ブログエディタ（6フィールド）
-- `BlogPublishService.swift` — Worker API連携、BGTask自動パブリッシュ
-- `FoundationModelService.swift` — Foundation Models (iOS 26+) LLM日記生成
-- `ImagePlaygroundService.swift` — Image Playground表情画像生成
-- `NotificationService.swift` — ブログリマインダー通知
+### セキュリティ監査
+**発見された問題**:
+1. 単一共有API_TOKEN — 全ユーザーが同じトークン
+2. ユーザー所有権検証なし — 任意ユーザー名でブログ投稿可能
+3. レート制限なし
+4. メール認証未実装
+5. `/api/username/check` が認証不要（ユーザー名列挙可能）
 
-## GitHub Issues (全完了)
-| # | タイトル | 状態 |
-|---|---------|------|
-| #1 | WeatherKit integration | ⏸️ BLOCKED (Apple Developer Portal) |
-| #2 | Image Playground cover art | ✅ ExpressionPlaygroundView実装 |
-| #3 | Foundation Models blog generation | ✅ FoundationModelService実装 |
-| #4 | Blog auto-publish to nehan.ai | ✅ Worker API + BlogPublishService + BGTask |
-| #5 | Menstrual cycle tracking | ✅ HealthKit menstrualFlow + UI表示 |
-| #6 | Blog reminder notification | ✅ NotificationService実装 |
-| #7 | Pull-to-refresh | ✅ `.refreshable` 実装 |
-| #8 | Coord memo list improvements | ✅ tips, rename, delete, lastVisitedAt |
-| #9 | Context-aware status message | ✅ contextMessage + streak help |
+**対策方針** (Phase 1-3):
+- Phase 1: D1 users テーブル + per-user API key + 所有権検証
+- Phase 2: Resend メール認証
+- Phase 3: リフレッシュトークン、デバイス管理、不正検知
 
-## 技術メモ
-- Swift 6 `default-isolation MainActor` では `@Observable` + `@State`/`@Bindable` を使用（`ObservableObject`は制約あり）
-- Glass UI: `.ultraThinMaterial` + `.presentationBackground(.ultraThinMaterial)` が基本パターン
-- タイムラインは `GeometryReader` + 288個の `Rectangle` で実装
-- ブログ生成: テンプレートベース → Foundation Models (iOS 26+) で感想欄をLLM強化
-- Image Playground: `imagePlaygroundSheet` で表情画像生成（iOS 18+）
-- 生理周期: `HKCategoryValueVaginalBleeding` (旧 `HKCategoryValueMenstrualFlow` は deprecated)
-- ブログ自動投稿: `BGProcessingTask` + `BlogPublishService.scheduledPublish()`
-- Worker Markdown→HTML: 独自軽量レンダラー（escapeHtml + inline変換）
-- Apple Developer Program 登録が現在ブロック中（WeatherKit, App Store提出に影響）
+## 変更ファイル一覧
+| ファイル | 変更内容 |
+|---------|---------|
+| `worker/src/index.ts` | URL構造変更、利用規約多言語化、ブログルート変更、R2アップロード、ユーザー名検証 |
+| `worker/public/index.html` | LP刷新（6特徴、3ステップ、フッター） |
+| `worker/wrangler.toml` | カスタムドメインルート、R2バケット設定 |
+| `worker/migrations/0002_usernames.sql` | 予約ユーザー名テーブル（202件） |
+| `NehanAI/NehanAI/BlogEditorView.swift` | 16:9クロップ、ストリークベースタイトル |
+| `NehanAI/NehanAI/ContentView.swift` | ヘッダーリンク、座標メモカテゴリUI |
+| `NehanAI/NehanAI/Models/PlaceBookmark.swift` | Category enum追加 |
+| `NehanAI/NehanAI/Services/BlogPublishService.swift` | R2カバーアップロード |
+| `AGENTS.md` | Worker URL更新 |
+| `CLAUDE.md` | Worker URL更新 |
 
-## 残タスク
+## 未解決Issue
+- [ ] セキュリティ: per-user認証の実装
+- [ ] GA4設定とトラッキング
+- [ ] API_TOKEN の再設定（現在 "test"）
+- [ ] Resend メール認証連携
+- [ ] 静的サイト生成（MkDocs Material + Cloudflare Pages）の評価
 - [ ] Apple Developer Program 登録再試行
 - [ ] 多言語ローカライズファイル（en, zh-Hans, zh-Hant）
-- [ ] 設定画面（パブリッシュ時刻、地名記録、言語変更、displayName設定等をまとめる）
-- [ ] 5分ごとの実データをタイムラインに反映
-- [ ] Worker migrations をデプロイ時に実行（`wrangler d1 migrations apply`）
-- [ ] displayName のiPhoneからの自動取得検討
+
+## 技術メモ
+- Hono ルート順序: 正規表現付きルートを catch-all パラメータルートより前に配置必須
+- `wrangler.toml`: `routes` はトップレベルに配置（`[[r2_buckets]]`等のセクション内に入れない）
+- `wrangler delete` は非対話モードでCWD名のworkerを削除するため要注意
+- Cloudflare DNS API: `POST /zones/:zone_id/dns_records` でCNAMEレコード追加可能
+- Image Playground は1:1出力 → `CGImage.cropping(to:)` でセンタークロップ

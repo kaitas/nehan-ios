@@ -50,10 +50,8 @@ struct BlogEntry {
     ]
 
     var autoTitle: String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy年M月d日"
-        f.timeZone = TimeZone(identifier: "Asia/Tokyo")
-        return "\(f.string(from: Date()))のライフログ"
+        let streak = UserProfileStore.shared.profile.currentStreak + 1
+        return "連続投稿\(streak)日目"
     }
 
     /// Today's date string (JST)
@@ -242,7 +240,7 @@ struct BlogEditorView: View {
         Task {
             if let data = try? await item.loadTransferable(type: Data.self),
                let uiImage = UIImage(data: data) {
-                entry.coverImage = uiImage
+                entry.coverImage = uiImage.croppedTo16x9()
                 entry.saveCoverImage()
             }
         }
@@ -325,7 +323,44 @@ struct ImagePlaygroundModifier: ViewModifier {
         guard let data = try? Data(contentsOf: url),
               let uiImage = UIImage(data: data) else { return }
 
-        entry.coverImage = uiImage
+        entry.coverImage = uiImage.croppedTo16x9()
         entry.saveCoverImage()
+    }
+}
+
+// MARK: - UIImage 16:9 Crop
+
+extension UIImage {
+    /// Center-crop to 16:9 aspect ratio
+    func croppedTo16x9() -> UIImage {
+        let targetRatio: CGFloat = 16.0 / 9.0
+        let currentRatio = size.width / size.height
+
+        let cropRect: CGRect
+        if currentRatio > targetRatio {
+            // Wider than 16:9 → crop sides
+            let newWidth = size.height * targetRatio
+            let x = (size.width - newWidth) / 2
+            cropRect = CGRect(x: x, y: 0, width: newWidth, height: size.height)
+        } else if currentRatio < targetRatio {
+            // Taller than 16:9 → crop top/bottom
+            let newHeight = size.width / targetRatio
+            let y = (size.height - newHeight) / 2
+            cropRect = CGRect(x: 0, y: y, width: size.width, height: newHeight)
+        } else {
+            return self // Already 16:9
+        }
+
+        // Scale cropRect to pixel coordinates
+        let scale = self.scale
+        let pixelRect = CGRect(
+            x: cropRect.origin.x * scale,
+            y: cropRect.origin.y * scale,
+            width: cropRect.width * scale,
+            height: cropRect.height * scale
+        )
+
+        guard let cgImage = self.cgImage?.cropping(to: pixelRect) else { return self }
+        return UIImage(cgImage: cgImage, scale: scale, orientation: imageOrientation)
     }
 }

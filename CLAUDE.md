@@ -6,7 +6,7 @@
 
 - **所有者**: はかせ（白井博士 / AICU Inc.）
 - **リポジトリ**: kaitas/nehan-ios
-- **Worker URL**: `https://nehan-worker.aki-2c0.workers.dev`
+- **Worker URL**: `https://ios.nehan.ai`
 - **Bundle ID**: AI.AICU.NehanAI
 
 ## アーキテクチャ

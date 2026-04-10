@@ -172,7 +172,7 @@ curl -H "Authorization: Bearer $NEHAN_API_TOKEN" \
 
 GitHub Actions から使う場合、リポジトリの Secrets に以下を設定:
 - `NEHAN_API_TOKEN` — Bearer Token
-- `NEHAN_WORKER_URL` — `https://nehan-worker.aki-2c0.workers.dev`
+- `NEHAN_WORKER_URL` — `https://ios.nehan.ai`
 
 ### D1 スキーマ
 ```sql

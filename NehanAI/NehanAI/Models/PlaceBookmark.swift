@@ -8,15 +8,37 @@ struct PlaceBookmark: Codable, Identifiable {
     let latitude: Double
     let longitude: Double
     var isSecret: Bool
+    var category: Category
     var createdAt: Date
     var lastVisitedAt: Date?
 
-    init(name: String, latitude: Double, longitude: Double, isSecret: Bool = false) {
+    enum Category: String, Codable, CaseIterable, Identifiable {
+        case home = "自宅"
+        case work = "職場"
+        case desk = "自席"
+        case bedroom = "寝室"
+        case other = "その他"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .home: "house.fill"
+            case .work: "building.2.fill"
+            case .desk: "desktopcomputer"
+            case .bedroom: "bed.double.fill"
+            case .other: "mappin"
+            }
+        }
+    }
+
+    init(name: String, latitude: Double, longitude: Double, isSecret: Bool = false, category: Category = .other) {
         self.id = UUID()
         self.name = name
         self.latitude = latitude
         self.longitude = longitude
         self.isSecret = isSecret
+        self.category = category
         self.createdAt = Date()
         self.lastVisitedAt = nil
     }

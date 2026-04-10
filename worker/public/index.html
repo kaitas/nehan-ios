@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>nehan.ai — ライフログ日報システム</title>
+  <title>nehan.ai — あなたのiPhoneヘルスケアが、そのまま日記になる</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <meta property="og:title" content="nehan.ai">
-  <meta property="og:description" content="位置情報・睡眠・ヘルスデータを自動記録し、毎日の日報を生成するライフログアプリ">
+  <meta property="og:description" content="iPhoneのヘルスケアデータから日報を自動生成。睡眠・歩数・位置情報を記録し、家族への安否確認にも。">
   <meta property="og:image" content="/og-image.png">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -45,8 +45,8 @@
       font-size: 1.15rem;
       opacity: 0.75;
       font-weight: 300;
-      max-width: 480px;
-      line-height: 1.6;
+      max-width: 520px;
+      line-height: 1.7;
     }
     .app-store-badge {
       margin-top: 2rem;
@@ -64,12 +64,12 @@
 
     /* Features */
     .features {
-      max-width: 900px;
+      max-width: 960px;
       margin: 0 auto;
       padding: 4rem 1.5rem;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-      gap: 2rem;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.5rem;
     }
     .feature {
       background: rgba(75, 0, 130, 0.15);
@@ -81,6 +81,44 @@
     .feature .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
     .feature h3 { font-size: 1.1rem; margin-bottom: 0.5rem; }
     .feature p { font-size: 0.9rem; opacity: 0.7; line-height: 1.6; }
+
+    /* How it works */
+    .how-it-works {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+      text-align: center;
+    }
+    .how-it-works h2 {
+      font-size: 1.5rem;
+      margin-bottom: 2rem;
+      font-weight: 500;
+    }
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      text-align: left;
+    }
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+    .step-num {
+      flex-shrink: 0;
+      width: 36px;
+      height: 36px;
+      background: #4B0082;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.95rem;
+    }
+    .step-text h4 { font-size: 1rem; margin-bottom: 0.25rem; }
+    .step-text p { font-size: 0.9rem; opacity: 0.65; line-height: 1.5; }
 
     /* Footer */
     footer {
@@ -101,34 +139,78 @@
   <section class="hero">
     <div class="logo">N</div>
     <h1>nehan.ai</h1>
-    <p class="tagline">位置情報・睡眠・ヘルスデータを自動で記録し、<br>毎日の日報を自動生成するライフログアプリ</p>
+    <p class="tagline">あなたのiPhoneヘルスケアが、そのまま日記になる。<br>睡眠・歩数・位置情報を自動で記録し、毎日のライフログを生成します。</p>
     <a class="app-store-badge" href="#">App Store — Coming Soon</a>
   </section>
 
   <!-- Features -->
   <section class="features">
     <div class="feature">
-      <div class="icon">📍</div>
-      <h3>位置情報の自動記録</h3>
-      <p>バックグラウンドで訪問場所を記録。地名も自動で取得し、行動ログを作成します。</p>
+      <div class="icon">📋</div>
+      <h3>日報の自動作成</h3>
+      <p>毎日のHealthKitデータ・位置情報から、ブログ形式の日報を自動生成。Apple Intelligence (オンデバイスAI) が文章を作成します。</p>
     </div>
     <div class="feature">
-      <div class="icon">🛏️</div>
-      <h3>睡眠分析</h3>
-      <p>HealthKitと連携し、deep・REM・core・awakeの睡眠ステージを自動取得します。</p>
+      <div class="icon">💚</div>
+      <h3>健康管理</h3>
+      <p>睡眠ステージ (deep/REM/core)、歩数、心拍数を自動記録。毎日の健康状態を可視化し、継続的なセルフケアを支援します。</p>
     </div>
     <div class="feature">
-      <div class="icon">📊</div>
-      <h3>日報の自動生成</h3>
-      <p>毎日23:00に一日のデータをまとめてGitHub Issueとして日報を作成。Discordにも通知します。</p>
+      <div class="icon">👨‍👩‍👧</div>
+      <h3>遠く離れた家族への安否確認</h3>
+      <p>日報を公開ブログとして共有すれば、離れて暮らす家族が日々の活動を確認できます。安心をお届けします。</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🍎</div>
+      <h3>iOSとApple Intelligenceで動作</h3>
+      <p>iPhoneのHealthKit・CoreLocation・Foundation Modelsを活用。データはデバイス上で処理され、プライバシーを保護します。</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🔗</div>
+      <h3>外部システムとAPI連携 (予定)</h3>
+      <p>GitHub Issues、Discord、Slack等との連携をAPIで提供予定。日報の外部配信やデータ活用が可能になります。(有料プラン)</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🏆</div>
+      <h3>ゲーミフィケーション</h3>
+      <p>連続投稿ストリーク・達成バッジでモチベーションを維持。毎日の記録を楽しく続けられます。</p>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="how-it-works">
+    <h2>使い方</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-text">
+          <h4>アプリをインストール</h4>
+          <p>HealthKitと位置情報へのアクセスを許可するだけ。あとは自動で記録が始まります。</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-text">
+          <h4>毎日を過ごす</h4>
+          <p>睡眠・移動・活動がバックグラウンドで自動記録されます。夢日記や感想を追加することもできます。</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-text">
+          <h4>日報が自動で完成</h4>
+          <p>オンデバイスAIが1日のデータからブログ記事を生成。カバーアートもAIで作成できます。</p>
+        </div>
+      </div>
     </div>
   </section>
 
   <!-- Footer -->
   <footer>
     <div class="links">
-      <a href="/privacy">プライバシーポリシー</a>
-      <a href="/terms">利用規約</a>
+      <a href="/terms/privacy/ja">プライバシーポリシー</a>
+      <a href="/terms/tos/ja">利用規約</a>
+      <a href="https://corp.aicu.ai" target="_blank">AICU Inc.</a>
     </div>
     <div>&copy; 2026 AICU Inc.</div>
   </footer>

@@ -2,6 +2,11 @@ name = "nehan-worker"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
+routes = [
+  { pattern = "nehan.ai/*", zone_name = "nehan.ai" },
+  { pattern = "ios.nehan.ai/*", zone_name = "nehan.ai" }
+]
+
 [assets]
 directory = "public"
 
@@ -10,6 +15,10 @@ binding = "DB"
 database_name = "nehan-db"
 database_id = "5b746e48-0a3b-41f4-8e93-8f1c1cb1bdc8"
 migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "COVERS"
+bucket_name = "nehan-covers"
 
 # secrets (set via wrangler secret put):
 # API_TOKEN

@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 enum BlogPublishService {
 
@@ -37,10 +38,6 @@ enum BlogPublishService {
     }
 
     private static func send(entry: BlogEntry, isDraft: Bool) async throws {
-        guard let url = URL(string: "\(AppConfig.workerURL)/api/blog") else {
-            throw URLError(.badURL)
-        }
-
         let jstFormatter = DateFormatter()
         jstFormatter.dateFormat = "yyyy-MM-dd"
         jstFormatter.timeZone = TimeZone(identifier: "Asia/Tokyo")
@@ -50,6 +47,18 @@ enum BlogPublishService {
             ? "user"
             : UserProfileStore.shared.profile.displayName
 
+        // Upload cover image to R2 if available
+        var coverURL = entry.coverURL
+        if let image = entry.coverImage {
+            if let uploaded = try? await uploadCover(image: image, username: username, date: dateString) {
+                coverURL = uploaded
+            }
+        }
+
+        guard let url = URL(string: "\(AppConfig.workerURL)/api/blog") else {
+            throw URLError(.badURL)
+        }
+
         let title = entry.title.isEmpty ? entry.autoTitle : entry.title
 
         let payload = RequestBody(
@@ -57,7 +66,7 @@ enum BlogPublishService {
             date: dateString,
             title: title,
             body: entry.fullText,
-            cover_url: entry.coverURL.isEmpty ? nil : entry.coverURL,
+            cover_url: coverURL.isEmpty ? nil : coverURL,
             is_draft: isDraft
         )
 
@@ -74,6 +83,58 @@ enum BlogPublishService {
         }
 
         print("[nehan] Blog \(isDraft ? "draft saved" : "published") for \(dateString)")
+    }
+
+    // MARK: - Cover image upload
+
+    /// Upload cover art PNG to R2 via Worker
+    private static func uploadCover(image: UIImage, username: String, date: String) async throws -> String {
+        guard let pngData = image.pngData() else {
+            throw URLError(.cannotDecodeContentData)
+        }
+
+        guard let url = URL(string: "\(AppConfig.workerURL)/api/blog/cover") else {
+            throw URLError(.badURL)
+        }
+
+        let boundary = UUID().uuidString
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(AppConfig.apiToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        // username field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"username\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(username)\r\n".data(using: .utf8)!)
+        // date field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"date\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(date)\r\n".data(using: .utf8)!)
+        // image field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"image\"; filename=\"cover.png\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: image/png\r\n\r\n".data(using: .utf8)!)
+        body.append(pngData)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+        request.httpBody = body
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+
+        // Parse response to get cover_url
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let coverUrl = json["cover_url"] as? String {
+            print("[nehan] Cover uploaded: \(coverUrl) (\(pngData.count) bytes)")
+            return coverUrl
+        }
+
+        return ""
     }
 
     /// Auto-publish pending blog (called from BGTask)
