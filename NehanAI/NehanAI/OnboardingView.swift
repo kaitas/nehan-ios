@@ -120,8 +120,8 @@ struct OnboardingView: View {
 
     private var profilePage: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                Spacer().frame(height: 40)
+            VStack(spacing: 16) {
+                Spacer().frame(height: 32)
 
                 Text(String(localized: "onboarding_profile_title", defaultValue: "プロフィール"))
                     .font(.title2.bold())
@@ -132,31 +132,23 @@ struct OnboardingView: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white.opacity(0.7))
 
-                // Birth year
+                // Birthday (year / month / day combined)
                 glassCard {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(String(localized: "onboarding_birth_year", defaultValue: "生まれた年"))
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.8))
-
-                        Picker("", selection: $selectedBirthYear) {
-                            ForEach((1930...currentYear - 10).reversed(), id: \.self) { year in
-                                Text(String(year)).tag(year)
-                            }
-                        }
-                        .pickerStyle(.wheel)
-                        .frame(height: 100)
-                    }
-                }
-
-                // Birthday (month/day)
-                glassCard {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text(String(localized: "onboarding_birthday", defaultValue: "誕生日"))
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.8))
 
                         HStack(spacing: 0) {
+                            Picker("", selection: $selectedBirthYear) {
+                                ForEach((1930...currentYear - 10).reversed(), id: \.self) { year in
+                                    Text(String(year)).tag(year)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 90)
+
                             Picker("", selection: $selectedBirthMonth) {
                                 ForEach(1...12, id: \.self) { m in
                                     Text("\(m)月").tag(m)
@@ -164,7 +156,7 @@ struct OnboardingView: View {
                             }
                             .pickerStyle(.wheel)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 80)
+                            .frame(height: 90)
 
                             Picker("", selection: $selectedBirthDay) {
                                 ForEach(1...31, id: \.self) { d in
@@ -173,7 +165,7 @@ struct OnboardingView: View {
                             }
                             .pickerStyle(.wheel)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 80)
+                            .frame(height: 90)
                         }
                     }
                 }
@@ -212,31 +204,6 @@ struct OnboardingView: View {
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.6))
                         }
-                    }
-                }
-
-                // Coordinate memo explanation
-                glassCard {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "mappin.and.ellipse")
-                                .foregroundStyle(.white.opacity(0.7))
-                            Text(String(localized: "onboarding_coord_memo_title", defaultValue: "座標メモについて"))
-                                .font(.subheadline.bold())
-                                .foregroundStyle(.white)
-                        }
-
-                        Text(String(localized: "onboarding_coord_memo_desc", defaultValue: "GPSの値や住所等を表示したり記録せずに、登録した座標メモで記録できます。また最大精度だと「自席」などでも記録可能です。ご自身のブログに役立つ座標メモを作っておきましょう（プライバシーを守るためにも使えます）"))
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.6))
-                            .lineSpacing(3)
-
-                        Toggle(isOn: $recordPlaceNames) {
-                            Text(String(localized: "onboarding_record_place_names", defaultValue: "地名を自動で記録する"))
-                                .font(.subheadline)
-                                .foregroundStyle(.white)
-                        }
-                        .tint(.green)
                     }
                 }
 

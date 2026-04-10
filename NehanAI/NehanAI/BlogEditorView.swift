@@ -229,7 +229,9 @@ struct BlogEditorView: View {
     }
 
     private var imagePlaygroundAvailable: Bool {
-        if #available(iOS 18.1, *) { return true }
+        if #available(iOS 26.0, *) {
+            return FoundationModelService.isAvailable
+        }
         return false
     }
 

@@ -4,13 +4,53 @@ import FoundationModels
 @available(iOS 26.0, *)
 enum FoundationModelService {
 
-    /// Generate a natural Japanese blog entry from health/location context
-    static func generateBlog(context: BlogContext) async throws -> String {
-        let session = LanguageModelSession()
+    /// Whether on-device Foundation Models (Apple Intelligence) are available on this device.
+    static var isAvailable: Bool {
+        SystemLanguageModel.default.isAvailable
+    }
 
+    /// Generate a natural Japanese blog entry from health/location context.
+    /// Falls back to a template-based summary when Apple Intelligence is not supported.
+    static func generateBlog(context: BlogContext) async throws -> String {
+        guard isAvailable else {
+            return buildFallbackText(context: context)
+        }
+
+        let session = LanguageModelSession()
         let prompt = buildPrompt(context: context)
         let response = try await session.respond(to: prompt)
         return response.content
+    }
+
+    // MARK: - Fallback (template-based)
+
+    /// Produce a simple template summary when the LLM is unavailable.
+    private static func buildFallbackText(context: BlogContext) -> String {
+        var parts: [String] = []
+
+        parts.append("\(context.date)の記録。")
+
+        if let h = context.sleepHours {
+            let quality = context.sleepQuality ?? ""
+            parts.append("睡眠は\(String(format: "%.1f", h))時間\(quality.isEmpty ? "" : "（\(quality)）")。")
+        }
+        if let s = context.stepCount {
+            parts.append("歩数は\(s)歩。")
+        }
+        if let hr = context.heartRate {
+            parts.append("平均心拍は\(hr)bpm。")
+        }
+        if !context.places.isEmpty {
+            parts.append("\(context.places.joined(separator: "、"))を訪問。")
+        }
+        if let d = context.dreamDiary, !d.isEmpty {
+            parts.append("夢日記: \(d)")
+        }
+        if let f = context.feeling, !f.isEmpty {
+            parts.append("気持ち: \(f)")
+        }
+
+        return parts.joined(separator: "")
     }
 
     struct BlogContext {

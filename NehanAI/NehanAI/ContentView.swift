@@ -23,6 +23,14 @@ struct ContentView: View {
     @State private var menstrualSummary: HealthKitService.MenstrualSummary?
     @State private var appState = AppState.shared
 
+    /// Whether Image Playground (Apple Intelligence imagery) is supported on this device.
+    private static var isImagePlaygroundSupported: Bool {
+        if #available(iOS 26.0, *) {
+            return FoundationModelService.isAvailable
+        }
+        return false
+    }
+
     private static let hmFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
@@ -96,8 +104,8 @@ struct ContentView: View {
     private var headerSection: some View {
         Section {
             HStack(spacing: 12) {
-                // Expression (Image Playground when available)
-                if #available(iOS 18.0, *) {
+                // Expression (Image Playground when available & supported)
+                if #available(iOS 18.0, *), Self.isImagePlaygroundSupported {
                     ExpressionPlaygroundView(
                         sleepQuality: sleepSummary.map { $0.deepMinutes > 60 ? "良好" : "普通" } ?? "",
                         stepCount: stepCount,

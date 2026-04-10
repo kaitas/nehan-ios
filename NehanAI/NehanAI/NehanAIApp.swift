@@ -11,6 +11,7 @@ class AppState {
 @main
 struct NehanAIApp: App {
     @State private var profileStore = UserProfileStore.shared
+    @State private var showIntelligenceAlert = false
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
@@ -28,7 +29,29 @@ struct NehanAIApp: App {
             } else {
                 ContentView()
                     .task { await setupNotifications() }
+                    .onAppear { checkAppleIntelligence() }
+                    .alert("Apple Intelligence", isPresented: $showIntelligenceAlert) {
+                        Button("OK", role: .cancel) {}
+                    } message: {
+                        Text("お使いの端末ではApple Intelligence機能が利用できません。一部の機能が制限されます。")
+                    }
             }
+        }
+    }
+
+    /// Show a one-time alert when Apple Intelligence is not available on this device.
+    private func checkAppleIntelligence() {
+        let key = "hasShownIntelligenceAlert"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+
+        var available = false
+        if #available(iOS 26.0, *) {
+            available = FoundationModelService.isAvailable
+        }
+
+        if !available {
+            showIntelligenceAlert = true
+            UserDefaults.standard.set(true, forKey: key)
         }
     }
 }
