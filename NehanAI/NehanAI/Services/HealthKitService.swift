@@ -13,11 +13,15 @@ class HealthKitService {
     func requestPermission() async throws {
         guard isAvailable else { return }
 
-        let types: Set<HKObjectType> = [
+        var types: Set<HKObjectType> = [
             HKCategoryType(.sleepAnalysis),
             HKQuantityType(.stepCount),
             HKQuantityType(.heartRate),
         ]
+        // Menstrual flow (optional, only if user is female)
+        if UserProfileStore.shared.isFemale {
+            types.insert(HKCategoryType(.menstrualFlow))
+        }
         try await store.requestAuthorization(toShare: [], read: types)
     }
 
@@ -198,6 +202,75 @@ class HealthKitService {
             max: Int(max),
             resting: nil
         )
+    }
+
+    // MARK: - Menstrual Cycle
+
+    struct MenstrualSummary {
+        let isOnPeriod: Bool
+        let flowLevel: FlowLevel
+        let daysSinceLastPeriod: Int?
+
+        enum FlowLevel: String {
+            case none, light, medium, heavy
+            var emoji: String {
+                switch self {
+                case .none: "—"
+                case .light: "🩸"
+                case .medium: "🩸🩸"
+                case .heavy: "🩸🩸🩸"
+                }
+            }
+        }
+    }
+
+    func fetchMenstrualSummary(for date: Date) async throws -> MenstrualSummary? {
+        guard isAvailable else { return nil }
+
+        let menstrualType = HKCategoryType(.menstrualFlow)
+        let calendar = Calendar.current
+        let start = calendar.date(byAdding: .day, value: -45, to: date)!
+        let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date))!
+
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+
+        let samples = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKCategorySample], Error>) in
+            let query = HKSampleQuery(
+                sampleType: menstrualType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sortDescriptor]
+            ) { _, results, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: results as? [HKCategorySample] ?? [])
+            }
+            store.execute(query)
+        }
+
+        guard !samples.isEmpty else { return nil }
+
+        // Check today
+        let todayStart = calendar.startOfDay(for: date)
+        let todaySamples = samples.filter { calendar.isDate($0.startDate, inSameDayAs: todayStart) }
+
+        if let todaySample = todaySamples.first {
+            let flow: MenstrualSummary.FlowLevel = switch todaySample.value {
+            case HKCategoryValueVaginalBleeding.light.rawValue: .light
+            case HKCategoryValueVaginalBleeding.medium.rawValue: .medium
+            case HKCategoryValueVaginalBleeding.heavy.rawValue: .heavy
+            default: .light
+            }
+            return MenstrualSummary(isOnPeriod: true, flowLevel: flow, daysSinceLastPeriod: 0)
+        }
+
+        // Find most recent period
+        if let mostRecent = samples.first {
+            let days = calendar.dateComponents([.day], from: mostRecent.startDate, to: date).day
+            return MenstrualSummary(isOnPeriod: false, flowLevel: .none, daysSinceLastPeriod: days)
+        }
+
+        return nil
     }
 
     // MARK: - Combined health log entry

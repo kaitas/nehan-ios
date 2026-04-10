@@ -12,6 +12,8 @@
 	<string>nehan.aiが現在地を記録します</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>nehan.aiが睡眠データを日報に記録します</string>
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>ブログの書き忘れをお知らせします</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
@@ -22,6 +24,7 @@
 	<array>
 		<string>ai.aicu.nehan.sync</string>
 		<string>ai.aicu.nehan.sleep</string>
+		<string>ai.aicu.nehan.blogpublish</string>
 	</array>
 </dict>
 </plist>

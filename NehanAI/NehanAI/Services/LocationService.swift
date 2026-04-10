@@ -45,13 +45,13 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             let lat = location.coordinate.latitude
             let lon = location.coordinate.longitude
 
-            // ブックマーク照合
+            // 座標メモ照合
             if let bookmark = PlaceBookmarkStore.shared.match(latitude: lat, longitude: lon) {
                 let entry = LogEntry(
                     type: .location,
                     latitude: bookmark.isSecret ? nil : lat,
                     longitude: bookmark.isSecret ? nil : lon,
-                    placeName: bookmark.name
+                    placeName: bookmark.isSecret ? "Unknown" : bookmark.name
                 )
                 self.onNewLocation?(entry)
                 return

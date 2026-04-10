@@ -8,6 +8,8 @@ struct PlaceBookmark: Codable, Identifiable {
     let latitude: Double
     let longitude: Double
     var isSecret: Bool
+    var createdAt: Date
+    var lastVisitedAt: Date?
 
     init(name: String, latitude: Double, longitude: Double, isSecret: Bool = false) {
         self.id = UUID()
@@ -15,6 +17,8 @@ struct PlaceBookmark: Codable, Identifiable {
         self.latitude = latitude
         self.longitude = longitude
         self.isSecret = isSecret
+        self.createdAt = Date()
+        self.lastVisitedAt = nil
     }
 
     func distance(to coordinate: CLLocationCoordinate2D) -> CLLocationDistance {
@@ -51,12 +55,20 @@ class PlaceBookmarkStore: ObservableObject {
         }
     }
 
-    /// 座標から200m以内のブックマークを返す
+    /// 座標から200m以内のブックマークを返す + lastVisitedAt を更新
     func match(latitude: Double, longitude: Double, threshold: Double = 200) -> PlaceBookmark? {
         let coord = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-        return bookmarks
-            .filter { $0.distance(to: coord) <= threshold }
-            .min { $0.distance(to: coord) < $1.distance(to: coord) }
+        guard let closest = bookmarks
+            .filter({ $0.distance(to: coord) <= threshold })
+            .min(by: { $0.distance(to: coord) < $1.distance(to: coord) })
+        else { return nil }
+
+        // Update lastVisitedAt
+        if let i = bookmarks.firstIndex(where: { $0.id == closest.id }) {
+            bookmarks[i].lastVisitedAt = Date()
+            save()
+        }
+        return closest
     }
 
     private func save() {
