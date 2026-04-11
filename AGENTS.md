@@ -339,18 +339,24 @@ NehanAI/NehanAI/
 6. やり残し (checklist)
 - カバーアート: Image Playground (1:1) → `croppedTo16x9()` センタークロップ
 
-**PlaceBookmark** — 座標メモ
+**PlaceTag** — My座標タグ（旧: 座標メモ）
 ```swift
-enum Category: String, Codable, CaseIterable {
-    case home = "自宅"       // house.fill
-    case work = "職場"       // building.2.fill
-    case desk = "自席"       // desktopcomputer
-    case bedroom = "寝室"    // bed.double.fill
-    case other = "その他"    // mappin
+struct PlaceTag: Codable, Identifiable {
+    let id: UUID              // タグID（不変、payload.tag で送信）
+    var name: String           // 表示名（ユーザーが自由に変更可能）
+    let latitude: Double       // 登録時の中心座標
+    let longitude: Double
+    var roundCoordinates: Bool // true(デフォルト): GPS座標を小数点3桁(~110m)に丸め
+    var category: Category     // home, work, desk, bedroom, other
+    var createdAt: Date
+    var lastVisitedAt: Date?
 }
 ```
 - 200m以内マッチング + lastVisitedAt自動更新
-- UserDefaults永続化
+- `roundCoordinates = true`: サーバー送信時に `PlaceTag.round3()` で丸め + `payload: {"tag":"UUID"}`
+- `roundCoordinates = false`: 精密座標をそのまま送信
+- UserDefaults永続化、`isSecret` → `roundCoordinates` 自動マイグレーション
+- `PlaceBookmark` / `PlaceBookmarkStore` は型エイリアスとして互換維持
 
 **UserProfile** — `@Observable`, UserDefaults
 - `displayName`, `language`, `birthYear`, `birthMonth`, `birthDay`, `gender`

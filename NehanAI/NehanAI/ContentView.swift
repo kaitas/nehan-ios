@@ -15,7 +15,7 @@ struct ContentView: View {
     @State private var stateOfMind: HealthKitService.StateOfMindSummary?
     @State private var showingNameDialog = false
     @State private var newPlaceName = ""
-    @State private var newPlaceIsSecret = false
+    @State private var newPlaceRoundCoords = true
     @State private var newPlaceCategory: PlaceBookmark.Category = .other
     @State private var showingBookmarks = false
     @State private var blogEntry = BlogEntry()
@@ -101,7 +101,7 @@ struct ContentView: View {
             .sheet(isPresented: $showingNameDialog) {
                 CoordMemoEditSheet(
                     name: $newPlaceName,
-                    isSecret: $newPlaceIsSecret,
+                    roundCoordinates: $newPlaceRoundCoords,
                     category: $newPlaceCategory,
                     onSave: { saveCoordMemo(); showingNameDialog = false },
                     onCancel: { showingNameDialog = false }
@@ -509,9 +509,9 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                         .popover(isPresented: $showCoordHelp) {
                             VStack(alignment: .leading, spacing: 8) {
-                                Label("座標メモ", systemImage: "mappin.and.ellipse")
+                                Label("My座標タグ", systemImage: "mappin.and.ellipse")
                                     .font(.subheadline.bold())
-                                Text("現在地から200m以内に登録された座標メモ「\(matched.name)」(\(matched.category.rawValue))にマッチしています。座標や住所の代わりにこの名前で記録されます。")
+                                Text("現在地から200m以内のMy座標タグ「\(matched.name)」(\(matched.category.rawValue))にマッチ中。この名前で記録されます。")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -537,16 +537,16 @@ struct ContentView: View {
                     }
                     Button {
                         newPlaceName = matched?.name ?? ""
-                        newPlaceIsSecret = matched?.isSecret ?? false
+                        newPlaceRoundCoords = matched?.roundCoordinates ?? true
                         showingNameDialog = true
                     } label: {
-                        Label(matched != nil ? "座標メモを編集" : "座標メモを登録", systemImage: "mappin.and.ellipse")
+                        Label(matched != nil ? "My座標タグを編集" : "My座標タグを登録", systemImage: "mappin.and.ellipse")
                     }
                     if let m = matched {
                         Button(role: .destructive) {
                             bookmarkStore.remove(id: m.id)
                         } label: {
-                            Label("座標メモ削除", systemImage: "trash")
+                            Label("タグ削除", systemImage: "trash")
                         }
                     }
                 }
@@ -858,7 +858,7 @@ struct ContentView: View {
             Button {
                 showingBookmarks = true
             } label: {
-                Label("座標メモ一覧", systemImage: "mappin.and.ellipse")
+                Label("My座標タグ一覧", systemImage: "mappin.and.ellipse")
             }
         }
     }
@@ -1021,20 +1021,20 @@ struct ContentView: View {
         if let existing = bookmarkStore.match(latitude: coord.latitude, longitude: coord.longitude) {
             var updated = existing
             updated.name = newPlaceName
-            updated.isSecret = newPlaceIsSecret
+            updated.roundCoordinates = newPlaceRoundCoords
             updated.category = newPlaceCategory
             bookmarkStore.update(updated)
         } else {
-            bookmarkStore.add(PlaceBookmark(
+            bookmarkStore.add(PlaceTag(
                 name: newPlaceName,
                 latitude: coord.latitude,
                 longitude: coord.longitude,
-                isSecret: newPlaceIsSecret,
+                roundCoordinates: newPlaceRoundCoords,
                 category: newPlaceCategory
             ))
         }
         newPlaceName = ""
-        newPlaceIsSecret = false
+        newPlaceRoundCoords = true
         newPlaceCategory = .other
     }
 
@@ -1464,12 +1464,12 @@ struct SedentaryInfo {
     let minutesSitting: Int
 }
 
-// MARK: - Coordinate Memo Edit Sheet (Glass)
+// MARK: - My座標タグ Edit Sheet (Glass)
 
 struct CoordMemoEditSheet: View {
     @Binding var name: String
-    @Binding var isSecret: Bool
-    @Binding var category: PlaceBookmark.Category
+    @Binding var roundCoordinates: Bool
+    @Binding var category: PlaceTag.Category
     var onSave: () -> Void
     var onCancel: () -> Void
 
@@ -1482,7 +1482,7 @@ struct CoordMemoEditSheet: View {
 
                 Section("カテゴリー") {
                     Picker("カテゴリー", selection: $category) {
-                        ForEach(PlaceBookmark.Category.allCases) { cat in
+                        ForEach(PlaceTag.Category.allCases) { cat in
                             Label(cat.rawValue, systemImage: cat.icon)
                                 .tag(cat)
                         }
@@ -1491,12 +1491,12 @@ struct CoordMemoEditSheet: View {
                 }
 
                 Section {
-                    Toggle("住所を非表示にする", isOn: $isSecret)
+                    Toggle("詳細の座標を記録しない", isOn: $roundCoordinates)
                 } footer: {
-                    Text("ONにすると、ブログや日報に座標・住所が表示されず、登録した名前のみが使用されます。")
+                    Text("ONにすると、GPS座標を約100m精度に丸めてサーバーに送信します。ブログや日報には登録した名前のみが表示されます。")
                 }
             }
-            .navigationTitle("座標メモ")
+            .navigationTitle("My座標タグ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1514,15 +1514,15 @@ struct CoordMemoEditSheet: View {
     }
 }
 
-// MARK: - Coordinate Memo List
+// MARK: - My座標タグ List
 
 struct CoordMemoListView: View {
-    @ObservedObject var store: PlaceBookmarkStore
+    @ObservedObject var store: PlaceTagStore
     @Environment(\.dismiss) private var dismiss
-    @State private var editingBookmark: PlaceBookmark?
+    @State private var editingBookmark: PlaceTag?
     @State private var editName = ""
-    @State private var editIsSecret = false
-    @State private var editCategory: PlaceBookmark.Category = .other
+    @State private var editRoundCoords = true
+    @State private var editCategory: PlaceTag.Category = .other
 
     private static let dtFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -1536,10 +1536,10 @@ struct CoordMemoListView: View {
                 // Tips
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Label("座標メモとは？", systemImage: "lightbulb.min")
+                        Label("My座標タグとは？", systemImage: "lightbulb.min")
                             .font(.body.bold())
                             .foregroundStyle(.primary)
-                        Text("GPSの座標や住所を表示・記録せずに、登録した名前だけで記録できます。最大精度なら「自席」レベルでも登録可能。プライバシーを守りながらブログに役立つ地名を管理しましょう。")
+                        Text("よく行く場所をタグとして登録すると、GPS座標を約100m精度に丸めてプライバシーを保護します。「自席」レベルでも登録可能。タグ名でブログに記録されます。")
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                             .lineSpacing(4)
@@ -1550,7 +1550,7 @@ struct CoordMemoListView: View {
                 // Bookmarks
                 Section {
                     if store.bookmarks.isEmpty {
-                        Text("座標メモなし")
+                        Text("My座標タグなし")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(store.bookmarks) { bookmark in
@@ -1558,7 +1558,7 @@ struct CoordMemoListView: View {
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     editName = bookmark.name
-                                    editIsSecret = bookmark.isSecret
+                                    editRoundCoords = bookmark.roundCoordinates
                                     editCategory = bookmark.category
                                     editingBookmark = bookmark
                                 }
@@ -1572,7 +1572,7 @@ struct CoordMemoListView: View {
                                 .swipeActions(edge: .leading) {
                                     Button {
                                         editName = bookmark.name
-                                        editIsSecret = bookmark.isSecret
+                                        editRoundCoords = bookmark.roundCoordinates
                                         editingBookmark = bookmark
                                     } label: {
                                         Label("", systemImage: "pencil")
@@ -1583,7 +1583,7 @@ struct CoordMemoListView: View {
                     }
                 }
             }
-            .navigationTitle("座標メモ")
+            .navigationTitle("My座標タグ")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button { dismiss() } label: {
@@ -1595,12 +1595,12 @@ struct CoordMemoListView: View {
             .sheet(item: $editingBookmark) { bookmark in
                 CoordMemoEditSheet(
                     name: $editName,
-                    isSecret: $editIsSecret,
+                    roundCoordinates: $editRoundCoords,
                     category: $editCategory,
                     onSave: {
                         if var bm = editingBookmark {
                             bm.name = editName
-                            bm.isSecret = editIsSecret
+                            bm.roundCoordinates = editRoundCoords
                             bm.category = editCategory
                             store.update(bm)
                         }
@@ -1614,7 +1614,7 @@ struct CoordMemoListView: View {
         }
     }
 
-    private func coordMemoRow(_ bookmark: PlaceBookmark) -> some View {
+    private func coordMemoRow(_ bookmark: PlaceTag) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Image(systemName: bookmark.category.icon)
@@ -1630,10 +1630,10 @@ struct CoordMemoListView: View {
                     .padding(.vertical, 2)
                     .background(.quaternary)
                     .clipShape(Capsule())
-                if bookmark.isSecret {
-                    Image(systemName: "lock.fill")
+                if bookmark.roundCoordinates {
+                    Image(systemName: "location.slash.fill")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.green)
                 }
                 Spacer()
             }
@@ -1649,8 +1649,12 @@ struct CoordMemoListView: View {
                 .foregroundStyle(.secondary)
             }
 
-            // Coordinates (only if not secret)
-            if !bookmark.isSecret {
+            // Coordinates (rounded if roundCoordinates is on)
+            if bookmark.roundCoordinates {
+                Text("~\(PlaceTag.round3(bookmark.latitude), specifier: "%.3f"), \(PlaceTag.round3(bookmark.longitude), specifier: "%.3f") (約100m精度)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
                 Text("\(bookmark.latitude, specifier: "%.4f"), \(bookmark.longitude, specifier: "%.4f")")
                     .font(.caption)
                     .foregroundStyle(.secondary)

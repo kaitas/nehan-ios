@@ -50,13 +50,14 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             // Track for timeline visualization
             self.recentLocations.append((time: location.timestamp, latitude: lat, longitude: lon))
 
-            // 座標メモ照合
-            if let bookmark = PlaceBookmarkStore.shared.match(latitude: lat, longitude: lon) {
+            // My座標タグ照合
+            if let tag = PlaceTagStore.shared.match(latitude: lat, longitude: lon) {
                 let entry = LogEntry(
                     type: .location,
-                    latitude: bookmark.isSecret ? nil : lat,
-                    longitude: bookmark.isSecret ? nil : lon,
-                    placeName: bookmark.isSecret ? "Unknown" : bookmark.name
+                    latitude: tag.roundCoordinates ? PlaceTag.round3(lat) : lat,
+                    longitude: tag.roundCoordinates ? PlaceTag.round3(lon) : lon,
+                    placeName: tag.name,
+                    payload: "{\"tag\":\"\(tag.id.uuidString)\"}"
                 )
                 self.onNewLocation?(entry)
                 return
