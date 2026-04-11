@@ -17,7 +17,12 @@ class HealthKitService {
             HKCategoryType(.sleepAnalysis),
             HKQuantityType(.stepCount),
             HKQuantityType(.heartRate),
+            HKCategoryType(.mindfulSession),
         ]
+        // State of Mind (iOS 18+)
+        if #available(iOS 18.0, *) {
+            types.insert(HKSampleType.stateOfMindType())
+        }
         // Menstrual flow (optional, only if user is female)
         if UserProfileStore.shared.isFemale {
             types.insert(HKCategoryType(.menstrualFlow))
@@ -271,6 +276,118 @@ class HealthKitService {
         }
 
         return nil
+    }
+
+    // MARK: - Mindfulness
+
+    struct MindfulSummary {
+        let totalMinutes: Int
+        let sessionCount: Int
+    }
+
+    func fetchMindfulSummary(for date: Date) async throws -> MindfulSummary? {
+        guard isAvailable else { return nil }
+
+        let mindfulType = HKCategoryType(.mindfulSession)
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: date)
+        let end = calendar.date(byAdding: .day, value: 1, to: start)!
+
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+
+        let samples = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKCategorySample], Error>) in
+            let query = HKSampleQuery(
+                sampleType: mindfulType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, results, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: results as? [HKCategorySample] ?? [])
+            }
+            store.execute(query)
+        }
+
+        guard !samples.isEmpty else { return nil }
+
+        let totalMinutes = samples.reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) / 60.0 }
+        return MindfulSummary(totalMinutes: Int(totalMinutes), sessionCount: samples.count)
+    }
+
+    // MARK: - State of Mind (iOS 18+)
+
+    struct StateOfMindSummary {
+        let valence: Double          // -1.0 (very unpleasant) to 1.0 (very pleasant)
+        let valenceLabel: String     // emoji representation
+        let labels: [String]         // feeling labels
+    }
+
+    @available(iOS 18.0, *)
+    func fetchStateOfMind(for date: Date) async throws -> StateOfMindSummary? {
+        guard isAvailable else { return nil }
+
+        let somType = HKSampleType.stateOfMindType()
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: date)
+        let end = calendar.date(byAdding: .day, value: 1, to: start)!
+
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+
+        let samples = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKSample], Error>) in
+            let query = HKSampleQuery(
+                sampleType: somType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sortDescriptor]
+            ) { _, results, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: results ?? [])
+            }
+            store.execute(query)
+        }
+
+        guard let latest = samples.first as? HKStateOfMind else { return nil }
+
+        let valence = latest.valence
+        let emoji: String
+        if valence > 0.5 { emoji = "😊" }
+        else if valence > 0.0 { emoji = "🙂" }
+        else if valence > -0.5 { emoji = "😐" }
+        else { emoji = "😞" }
+
+        let labelNames = latest.labels.map { label -> String in
+            switch label {
+            case .amazed: "驚き"
+            case .amused: "楽しい"
+            case .angry: "怒り"
+            case .anxious: "不安"
+            case .brave: "勇敢"
+            case .calm: "穏やか"
+            case .confident: "自信"
+            case .content: "満足"
+            case .disappointed: "失望"
+            case .drained: "疲弊"
+            case .excited: "興奮"
+            case .grateful: "感謝"
+            case .happy: "幸せ"
+            case .hopeful: "希望"
+            case .indifferent: "無関心"
+            case .irritated: "イライラ"
+            case .joyful: "喜び"
+            case .lonely: "孤独"
+            case .overwhelmed: "圧倒"
+            case .peaceful: "平和"
+            case .proud: "誇り"
+            case .relieved: "安心"
+            case .sad: "悲しい"
+            case .stressed: "ストレス"
+            case .worried: "心配"
+            @unknown default: "—"
+            }
+        }
+
+        return StateOfMindSummary(valence: valence, valenceLabel: emoji, labels: labelNames)
     }
 
     // MARK: - Combined health log entry

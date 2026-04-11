@@ -10,6 +10,8 @@ struct ContentView: View {
     @State private var sleepSummary: HealthKitService.SleepSummary?
     @State private var stepCount: Int = 0
     @State private var heartRate: HealthKitService.HeartRateSummary?
+    @State private var mindfulSummary: HealthKitService.MindfulSummary?
+    @State private var stateOfMind: HealthKitService.StateOfMindSummary?
     @State private var showingNameDialog = false
     @State private var newPlaceName = ""
     @State private var newPlaceIsSecret = false
@@ -408,9 +410,25 @@ struct ContentView: View {
                     Label(stepCount.formatted(), systemImage: "figure.walk")
                         .font(.caption)
                 }
-                if let hr = heartRate {
-                    Label("\(hr.average)", systemImage: "heart")
+                if let mindful = mindfulSummary {
+                    Label("\(mindful.totalMinutes)m", systemImage: "brain.head.profile")
                         .font(.caption)
+                }
+                if let som = stateOfMind {
+                    Text("\(som.valenceLabel) \(som.labels.first ?? "")")
+                        .font(.caption)
+                } else {
+                    // Prompt to log mood in Health app
+                    Button {
+                        if let url = URL(string: "x-apple-health://") {
+                            UIApplication.shared.open(url)
+                        }
+                    } label: {
+                        Label("気分を記録", systemImage: "face.smiling")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    .buttonStyle(.plain)
                 }
                 if let mc = menstrualSummary, mc.isOnPeriod {
                     Text(mc.flowLevel.emoji)
@@ -833,6 +851,10 @@ struct ContentView: View {
         sleepSummary = try? await hk.fetchSleepSummary(for: today)
         stepCount = (try? await hk.fetchStepCount(for: today)) ?? 0
         heartRate = try? await hk.fetchHeartRateSummary(for: today)
+        mindfulSummary = try? await hk.fetchMindfulSummary(for: today)
+        if #available(iOS 18.0, *) {
+            stateOfMind = try? await hk.fetchStateOfMind(for: today)
+        }
         if UserProfileStore.shared.isFemale {
             menstrualSummary = try? await hk.fetchMenstrualSummary(for: today)
         }
