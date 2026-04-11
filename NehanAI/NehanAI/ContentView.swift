@@ -30,6 +30,8 @@ struct ContentView: View {
     @State private var showDreamDialog = false
     @State private var dreamInput = ""
     @State private var lastAutoRefresh: Date?
+    @State private var showMoodPicker = false
+    @State private var selectedMood: String = ""
 
     /// Whether Image Playground (Apple Intelligence imagery) is supported on this device.
     private static var isImagePlaygroundSupported: Bool {
@@ -115,6 +117,15 @@ struct ContentView: View {
                 showBlogEditor = true
                 appState.shouldOpenBlogEditor = false
             }
+        }
+        .sheet(isPresented: $showMoodPicker) {
+            MoodPickerSheet(selectedMood: $selectedMood) { mood in
+                blogEntry.todayFeeling = mood
+                BlogPublishService.saveLocal(blogEntry)
+                showMoodPicker = false
+            }
+            .presentationDetents([.medium])
+            .presentationBackground(.ultraThinMaterial)
         }
         .alert("おはようございます!", isPresented: $showDreamDialog) {
             TextField("どんな夢を見た？", text: $dreamInput)
@@ -417,13 +428,11 @@ struct ContentView: View {
                 if let som = stateOfMind {
                     Text("\(som.valenceLabel) \(som.labels.first ?? "")")
                         .font(.caption)
+                } else if !selectedMood.isEmpty {
+                    Text(selectedMood)
+                        .font(.caption)
                 } else {
-                    // Prompt to log mood in Health app
-                    Button {
-                        if let url = URL(string: "x-apple-health://") {
-                            UIApplication.shared.open(url)
-                        }
-                    } label: {
+                    Button { showMoodPicker = true } label: {
                         Label("気分を記録", systemImage: "face.smiling")
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -1164,6 +1173,64 @@ struct CoordMemoListView: View {
                     .font(.caption2)
             }
             .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+// MARK: - Mood Picker Sheet
+
+struct MoodPickerSheet: View {
+    @Binding var selectedMood: String
+    var onSelect: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private let moods: [(String, String)] = [
+        ("😊", "幸せ"), ("🙂", "穏やか"), ("😐", "普通"),
+        ("😔", "悲しい"), ("😤", "イライラ"), ("😰", "不安"),
+        ("🤩", "興奮"), ("😴", "眠い"), ("💪", "元気"),
+        ("🥱", "疲れた"), ("🤔", "考え中"), ("😌", "リラックス"),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Text("今の気分は？")
+                    .font(.title3.bold())
+                    .padding(.top)
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 16) {
+                    ForEach(moods, id: \.0) { emoji, label in
+                        Button {
+                            selectedMood = "\(emoji) \(label)"
+                            onSelect("\(emoji) \(label)")
+                        } label: {
+                            VStack(spacing: 4) {
+                                Text(emoji)
+                                    .font(.title)
+                                Text(label)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer()
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 }
