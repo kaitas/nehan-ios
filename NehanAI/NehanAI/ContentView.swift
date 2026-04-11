@@ -808,8 +808,15 @@ struct ContentView: View {
     }
 
     private func setupServices() {
-        locationService.onNewLocation = { entry in
+        locationService.onNewLocation = { [bookmarkStore] entry in
             SyncService.shared.addEntry(entry)
+            // Update lastVisitedAt outside of view body
+            if let loc = LocationService.shared.lastLocation {
+                bookmarkStore.updateLastVisited(
+                    latitude: loc.coordinate.latitude,
+                    longitude: loc.coordinate.longitude
+                )
+            }
         }
         Task {
             try? await HealthKitService.shared.requestPermission()

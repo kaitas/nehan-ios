@@ -77,20 +77,26 @@ class PlaceBookmarkStore: ObservableObject {
         }
     }
 
-    /// 座標から200m以内のブックマークを返す + lastVisitedAt を更新
+    /// 座標から200m以内のブックマー��を返す（読み取り専用、view bodyから安全に呼べる）
     func match(latitude: Double, longitude: Double, threshold: Double = 200) -> PlaceBookmark? {
+        let coord = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        return bookmarks
+            .filter({ $0.distance(to: coord) <= threshold })
+            .min(by: { $0.distance(to: coord) < $1.distance(to: coord) })
+    }
+
+    /// 座標から200m以内のブック��ークの lastVisitedAt を更新���view body外から呼ぶ）
+    func updateLastVisited(latitude: Double, longitude: Double, threshold: Double = 200) {
         let coord = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
         guard let closest = bookmarks
             .filter({ $0.distance(to: coord) <= threshold })
             .min(by: { $0.distance(to: coord) < $1.distance(to: coord) })
-        else { return nil }
+        else { return }
 
-        // Update lastVisitedAt
         if let i = bookmarks.firstIndex(where: { $0.id == closest.id }) {
             bookmarks[i].lastVisitedAt = Date()
             save()
         }
-        return closest
     }
 
     private func save() {
