@@ -1495,6 +1495,28 @@ struct CoordMemoEditSheet: View {
                 } footer: {
                     Text("ONにすると、GPS座標を約100m精度に丸めてサーバーに送信します。ブログや日報には登録した名前のみが表示されます。")
                 }
+
+                Section {
+                    DisclosureGroup("技術仕様") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            specRow("タグID", "UUID（端末内で生成、名前変更に影響されません）")
+                            specRow("マッチング", "現在地から半径200m以内で最も近いタグに一致")
+                            specRow("GPS丸め", "小数点3桁に丸め（約110m精度）")
+                            Divider()
+                            Text("丸め精度の目安")
+                                .font(.caption.bold())
+                            specRow("小数点8桁", "~1mm（端末の生データ）")
+                            specRow("小数点4桁", "~11m（建物特定可能）")
+                            specRow("小数点3桁", "~110m（本アプリの丸め精度）")
+                            specRow("小数点2桁", "~1.1km（町丁目レベル）")
+                            Divider()
+                            specRow("サーバー送信", "丸め後の座標 + タグ名 + タグID")
+                            specRow("ブログ表示", "タグ名のみ（座標・住所は非表示）")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
             }
             .navigationTitle("My座標タグ")
             .navigationBarTitleDisplayMode(.inline)
@@ -1510,6 +1532,15 @@ struct CoordMemoEditSheet: View {
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
+        }
+    }
+
+    private func specRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .fontWeight(.medium)
+                .frame(width: 90, alignment: .leading)
+            Text(value)
         }
     }
 }
