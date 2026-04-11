@@ -43,9 +43,9 @@ enum BlogPublishService {
         jstFormatter.timeZone = TimeZone(identifier: "Asia/Tokyo")
         let dateString = jstFormatter.string(from: Date())
 
-        let username = UserProfileStore.shared.profile.displayName.isEmpty
-            ? "user"
-            : UserProfileStore.shared.profile.displayName
+        // Username comes from server auth context for registered users
+        let username = AuthService.shared.currentUser?.username
+            ?? UserProfileStore.shared.profile.displayName
 
         // Upload cover image to R2 if available
         var coverURL = entry.coverURL
@@ -72,7 +72,7 @@ enum BlogPublishService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(AppConfig.apiToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(AuthService.shared.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(payload)
 
@@ -100,7 +100,7 @@ enum BlogPublishService {
         let boundary = UUID().uuidString
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(AppConfig.apiToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(AuthService.shared.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
         var body = Data()

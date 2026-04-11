@@ -210,7 +210,7 @@ struct BlogEditorView: View {
                     Button {
                         showImagePlayground = true
                     } label: {
-                        Label("AIで生成", systemImage: "wand.and.stars")
+                        Label("iPhoneのAIで生成", systemImage: "wand.and.stars")
                             .font(.caption)
                     }
                 }

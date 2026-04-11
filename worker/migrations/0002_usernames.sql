@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS reserved_usernames (
   username TEXT PRIMARY KEY
 );
 
-INSERT INTO reserved_usernames (username) VALUES
+INSERT OR IGNORE INTO reserved_usernames (username) VALUES
   ('admin'),
   ('root'),
   ('all'),

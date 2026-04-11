@@ -46,13 +46,17 @@ GitHub Actions (23:00 JST) → Issue + Discord通知
 ## シークレット管理
 | 場所 | 方法 |
 |------|------|
-| iOS | `Secrets.xcconfig` (gitignored) → Info.plist → AppConfig.swift |
-| Worker | `wrangler secret put API_TOKEN` |
+| iOS | `Secrets.xcconfig` (gitignored) → Info.plist → AppConfig.swift (legacy) |
+| iOS | Keychain → AuthService.swift (per-user API key) |
+| Worker | `wrangler secret put API_TOKEN` (legacy, GitHub Actions互換) |
+| Worker | `wrangler secret put RESEND_API_KEY` (メール認証) |
 | GitHub Actions | Repository Secrets: `NEHAN_API_TOKEN`, `NEHAN_WORKER_URL`, `DISCORD_WEBHOOK_URL` |
 
 ## 現在の課題 (2026-04-11)
-1. **セキュリティ**: 単一共有トークン → per-user認証が必要
-2. **GA4**: Google Analytics 4 の設定とトラッキング未実装
-3. **メール認証**: Resend連携未実装
+1. ~~**セキュリティ**: 単一共有トークン → per-user認証が必要~~ ✅ 実装済み
+2. ~~**GA4**: Google Analytics 4 の設定とトラッキング未実装~~ ✅ 実装済み
+3. ~~**メール認証**: Resend連携未実装~~ ✅ 実装済み (要RESEND_API_KEY設定)
 4. **静的サイト生成**: MkDocs Material + Cloudflare Pages の評価待ち
 5. **Apple Developer Program**: 登録再試行が必要（WeatherKit, App Store提出に影響）
+6. **依頼**: `wrangler secret put RESEND_API_KEY` でResend APIキーを設定する必要あり
+7. **依頼**: `wrangler secret put ADMIN_TOKEN` でAdmin Dashboardパスワードを設定する必要あり

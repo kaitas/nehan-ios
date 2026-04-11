@@ -17,6 +17,8 @@ class HealthKitService {
             HKCategoryType(.sleepAnalysis),
             HKQuantityType(.stepCount),
             HKQuantityType(.heartRate),
+            HKQuantityType(.restingHeartRate),
+            HKQuantityType(.heartRateVariabilitySDNN),
             HKCategoryType(.mindfulSession),
             HKQuantityType(.dietaryCaffeine),
             HKQuantityType(.dietaryWater),
@@ -129,12 +131,124 @@ class HealthKitService {
         )
     }
 
+    // MARK: - Naps (daytime sleep)
+
+    struct NapSummary {
+        let startTime: Date
+        let endTime: Date
+        let durationMinutes: Int
+
+        /// Nap quality evaluation based on duration
+        var evaluation: String {
+            if durationMinutes <= 20 {
+                return "パワーナップ（理想的）"
+            } else if durationMinutes <= 30 {
+                return "短い仮眠"
+            } else if durationMinutes < 60 {
+                return "やや長め（睡眠慣性に注意）"
+            } else if durationMinutes >= 80 && durationMinutes <= 100 {
+                return "1サイクル（徹夜明けに有効）"
+            } else {
+                return "長時間の昼寝"
+            }
+        }
+
+        var evaluationEn: String {
+            if durationMinutes <= 20 {
+                return "Power nap (ideal)"
+            } else if durationMinutes <= 30 {
+                return "Short nap"
+            } else if durationMinutes < 60 {
+                return "Slightly long (sleep inertia risk)"
+            } else if durationMinutes >= 80 && durationMinutes <= 100 {
+                return "Full cycle (good after all-nighter)"
+            } else {
+                return "Long nap"
+            }
+        }
+    }
+
+    /// Fetch daytime naps (12:00-22:00) from HealthKit sleep analysis
+    func fetchNaps(for date: Date) async throws -> [NapSummary] {
+        guard isAvailable else { return [] }
+
+        let sleepType = HKCategoryType(.sleepAnalysis)
+        let calendar = Calendar.current
+
+        // Search window: 12:00-22:00 (daytime naps)
+        let startOfSearch = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: date)!
+        let endOfSearch = calendar.date(bySettingHour: 22, minute: 0, second: 0, of: date)!
+
+        let predicate = HKQuery.predicateForSamples(withStart: startOfSearch, end: endOfSearch, options: .strictStartDate)
+        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        let samples = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKCategorySample], Error>) in
+            let query = HKSampleQuery(
+                sampleType: sleepType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sortDescriptor]
+            ) { _, results, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: results as? [HKCategorySample] ?? [])
+            }
+            store.execute(query)
+        }
+
+        // Filter actual sleep samples (not inBed or awake)
+        let sleepSamples = samples.filter { sample in
+            sample.value != HKCategoryValueSleepAnalysis.awake.rawValue &&
+            sample.value != HKCategoryValueSleepAnalysis.inBed.rawValue
+        }
+
+        guard !sleepSamples.isEmpty else { return [] }
+
+        // Group contiguous sleep samples into nap sessions (gap > 10 min = new nap)
+        var naps: [NapSummary] = []
+        var sessionStart = sleepSamples[0].startDate
+        var sessionEnd = sleepSamples[0].endDate
+
+        for i in 1..<sleepSamples.count {
+            let sample = sleepSamples[i]
+            let gap = sample.startDate.timeIntervalSince(sessionEnd)
+
+            if gap > 600 { // 10 minute gap = new nap session
+                let duration = Int(sessionEnd.timeIntervalSince(sessionStart) / 60)
+                if duration >= 5 { // Ignore micro-naps under 5 minutes
+                    naps.append(NapSummary(startTime: sessionStart, endTime: sessionEnd, durationMinutes: duration))
+                }
+                sessionStart = sample.startDate
+            }
+            sessionEnd = max(sessionEnd, sample.endDate)
+        }
+
+        // Don't forget the last session
+        let duration = Int(sessionEnd.timeIntervalSince(sessionStart) / 60)
+        if duration >= 5 {
+            naps.append(NapSummary(startTime: sessionStart, endTime: sessionEnd, durationMinutes: duration))
+        }
+
+        return naps
+    }
+
     func fetchSleepData(for date: Date) async throws -> LogEntry? {
         guard let summary = try await fetchSleepSummary(for: date) else { return nil }
 
         let formatter = ISO8601DateFormatter()
         let totalHours = Double(summary.totalMinutes) / 60.0
-        let payload: [String: Any] = [
+
+        // Fetch naps for the same day
+        let naps = (try? await fetchNaps(for: date)) ?? []
+        let napsPayload: [[String: Any]] = naps.map { nap in
+            [
+                "start": formatter.string(from: nap.startTime),
+                "end": formatter.string(from: nap.endTime),
+                "minutes": nap.durationMinutes,
+                "evaluation": nap.evaluation,
+            ]
+        }
+
+        var payload: [String: Any] = [
             "asleep": summary.asleep.map { formatter.string(from: $0) } ?? "",
             "awake": summary.awake.map { formatter.string(from: $0) } ?? "",
             "totalHours": round(totalHours * 10) / 10,
@@ -145,6 +259,10 @@ class HealthKitService {
                 ["stage": "awake", "minutes": summary.awakeMinutes],
             ]
         ]
+
+        if !napsPayload.isEmpty {
+            payload["naps"] = napsPayload
+        }
 
         let jsonData = try JSONSerialization.data(withJSONObject: payload)
         let jsonString = String(data: jsonData, encoding: .utf8)
@@ -186,6 +304,7 @@ class HealthKitService {
         let min: Int
         let max: Int
         let resting: Int?
+        let hrv: Double?  // SDNN in ms
     }
 
     func fetchHeartRateSummary(for date: Date) async throws -> HeartRateSummary? {
@@ -217,12 +336,91 @@ class HealthKitService {
         let min = stats.minimumQuantity()?.doubleValue(for: unit) ?? avg
         let max = stats.maximumQuantity()?.doubleValue(for: unit) ?? avg
 
+        // Fetch resting heart rate
+        let restingHR: Int? = try await {
+            let restingType = HKQuantityType(.restingHeartRate)
+            let restingStats = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<HKStatistics?, Error>) in
+                let query = HKStatisticsQuery(
+                    quantityType: restingType,
+                    quantitySamplePredicate: predicate,
+                    options: .discreteAverage
+                ) { _, result, error in
+                    if let error { continuation.resume(throwing: error); return }
+                    continuation.resume(returning: result)
+                }
+                store.execute(query)
+            }
+            guard let avg = restingStats?.averageQuantity()?.doubleValue(for: unit) else { return nil }
+            return Int(avg)
+        }()
+
+        // Fetch HRV (SDNN)
+        let hrv: Double? = try await {
+            let hrvType = HKQuantityType(.heartRateVariabilitySDNN)
+            let hrvUnit = HKUnit.secondUnit(with: .milli)
+            let hrvStats = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<HKStatistics?, Error>) in
+                let query = HKStatisticsQuery(
+                    quantityType: hrvType,
+                    quantitySamplePredicate: predicate,
+                    options: .discreteAverage
+                ) { _, result, error in
+                    if let error { continuation.resume(throwing: error); return }
+                    continuation.resume(returning: result)
+                }
+                store.execute(query)
+            }
+            guard let avg = hrvStats?.averageQuantity()?.doubleValue(for: hrvUnit) else { return nil }
+            return avg
+        }()
+
         return HeartRateSummary(
             average: Int(avg),
             min: Int(min),
             max: Int(max),
-            resting: nil
+            resting: restingHR,
+            hrv: hrv
         )
+    }
+
+    // MARK: - Heart Rate Timeline
+
+    struct HeartRatePoint {
+        let time: Date
+        let bpm: Int
+    }
+
+    /// Fetch individual heart rate samples for timeline visualization
+    func fetchHeartRateTimeline(for date: Date) async throws -> [HeartRatePoint] {
+        guard isAvailable else { return [] }
+
+        let hrType = HKQuantityType(.heartRate)
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: date)
+        let end = calendar.date(byAdding: .day, value: 1, to: start)!
+
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        let unit = HKUnit.count().unitDivided(by: .minute())
+
+        let samples = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKQuantitySample], Error>) in
+            let query = HKSampleQuery(
+                sampleType: hrType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sortDescriptor]
+            ) { _, results, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: results as? [HKQuantitySample] ?? [])
+            }
+            store.execute(query)
+        }
+
+        return samples.map { sample in
+            HeartRatePoint(
+                time: sample.startDate,
+                bpm: Int(sample.quantity.doubleValue(for: unit))
+            )
+        }
     }
 
     // MARK: - Menstrual Cycle
@@ -567,11 +765,14 @@ class HealthKitService {
 
         var payload: [String: Any] = ["steps": steps]
         if let hr {
-            payload["heartRate"] = [
+            var hrDict: [String: Any] = [
                 "avg": hr.average,
                 "min": hr.min,
                 "max": hr.max,
             ]
+            if let resting = hr.resting { hrDict["resting"] = resting }
+            if let hrv = hr.hrv { hrDict["hrv"] = Int(hrv) }
+            payload["heartRate"] = hrDict
         }
 
         let jsonData = try JSONSerialization.data(withJSONObject: payload)

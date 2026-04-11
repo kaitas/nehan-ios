@@ -29,7 +29,7 @@ class SyncService {
         guard let url = URL(string: "\(AppConfig.workerURL)/api/log") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(AppConfig.apiToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(AuthService.shared.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         do {

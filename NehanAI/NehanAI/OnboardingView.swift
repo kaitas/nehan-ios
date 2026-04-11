@@ -15,9 +15,16 @@ struct OnboardingView: View {
     @State private var privacyRead = false
     @State private var recordPlaceNames = true
 
+    @State private var isRegistering = false
+
     private let currentYear = Calendar.current.component(.year, from: Date())
 
     private var bothRead: Bool { termsRead && privacyRead }
+
+    /// User must be at least 13 years old
+    private var isUnder13: Bool {
+        currentYear - selectedBirthYear < 13
+    }
 
     var body: some View {
         ZStack {
@@ -38,6 +45,12 @@ struct OnboardingView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .always))
+            .sheet(isPresented: $showTermsWeb, onDismiss: { termsRead = true }) {
+                SafariSheet(url: URL(string: "https://nehan.ai/terms/ios-tos/ja")!)
+            }
+            .sheet(isPresented: $showPrivacyWeb, onDismiss: { privacyRead = true }) {
+                SafariSheet(url: URL(string: "https://nehan.ai/terms/privacy/ja")!)
+            }
         }
     }
 
@@ -191,7 +204,7 @@ struct OnboardingView: View {
                                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 10)
-                                            .strokeBorder(selectedSex == sex ? .white.opacity(0.5) : .clear, lineWidth: 1)
+                                            .strokeBorder(selectedSex == sex ? .white.opacity(0.8) : .clear, lineWidth: 2)
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -207,9 +220,38 @@ struct OnboardingView: View {
                     }
                 }
 
+                if isUnder13 {
+                    Text(String(localized: "onboarding_age_restriction", defaultValue: "利用規約およびプライバシーポリシーに基づき、13歳未満の方はご利用いただけません。"))
+                        .font(.caption)
+                        .foregroundStyle(.red.opacity(0.9))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+
+                    HStack(spacing: 16) {
+                        Button {
+                            showTermsWeb = true
+                        } label: {
+                            Text(String(localized: "onboarding_terms_short", defaultValue: "利用規約"))
+                                .font(.caption)
+                                .underline()
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        Button {
+                            showPrivacyWeb = true
+                        } label: {
+                            Text(String(localized: "onboarding_privacy_short", defaultValue: "プライバシーポリシー"))
+                                .font(.caption)
+                                .underline()
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                    }
+                }
+
                 glassButton(String(localized: "onboarding_next", defaultValue: "次へ")) {
                     withAnimation { currentPage = 3 }
                 }
+                .disabled(isUnder13)
+                .opacity(isUnder13 ? 0.3 : 1)
                 .padding(.bottom, 40)
             }
             .padding(.horizontal, 32)
@@ -263,6 +305,7 @@ struct OnboardingView: View {
             Spacer()
 
             Button {
+                isRegistering = true
                 profileStore.profile.birthYear = selectedBirthYear
                 profileStore.profile.birthMonth = selectedBirthMonth
                 profileStore.profile.birthDay = selectedBirthDay
@@ -271,24 +314,32 @@ struct OnboardingView: View {
                 profileStore.profile.recordPlaceNames = recordPlaceNames
                 profileStore.profile.termsRead = true
                 profileStore.profile.privacyRead = true
-                profileStore.completeOnboarding()
+                // Register FIRST, then complete onboarding (so needsFTUE transitions cleanly)
+                Task {
+                    await AuthService.shared.register()
+                    await AuthService.shared.syncDemographics(profile: profileStore.profile)
+                    profileStore.completeOnboarding()
+                    isRegistering = false
+                }
             } label: {
-                Text(String(localized: "onboarding_agree_start", defaultValue: "同意してはじめる"))
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(bothRead ? .white : .white.opacity(0.2), in: RoundedRectangle(cornerRadius: 14))
-                    .foregroundStyle(bothRead ? .black : .white.opacity(0.4))
+                HStack(spacing: 8) {
+                    if isRegistering {
+                        ProgressView()
+                            .tint(.black)
+                    }
+                    Text(isRegistering
+                         ? String(localized: "onboarding_registering", defaultValue: "登録中...")
+                         : String(localized: "onboarding_agree_start", defaultValue: "同意してはじめる"))
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(bothRead ? .white : .white.opacity(0.2), in: RoundedRectangle(cornerRadius: 14))
+                .foregroundStyle(bothRead ? .black : .white.opacity(0.4))
             }
-            .disabled(!bothRead)
+            .disabled(!bothRead || isRegistering)
             .padding(.horizontal, 32)
             .padding(.bottom, 40)
-        }
-        .sheet(isPresented: $showTermsWeb, onDismiss: { termsRead = true }) {
-            SafariSheet(url: URL(string: "\(AppConfig.workerURL)/terms")!)
-        }
-        .sheet(isPresented: $showPrivacyWeb, onDismiss: { privacyRead = true }) {
-            SafariSheet(url: URL(string: "\(AppConfig.workerURL)/privacy")!)
         }
     }
 

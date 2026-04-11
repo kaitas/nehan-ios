@@ -33,6 +33,14 @@ struct ContentView: View {
     @State private var lastAutoRefresh: Date?
     @State private var showMoodPicker = false
     @State private var selectedMood: String = ""
+    @State private var naps: [HealthKitService.NapSummary] = []
+    @State private var publishedBlogURL: String?
+    @State private var heartRateTimeline: [HealthKitService.HeartRatePoint] = []
+    @State private var aiFlavorText: String?
+    @State private var showRegistration = false
+    @State private var isInitialLoading = true
+    @State private var loadingProgress: Double = 0
+    @State private var loadingStatus = "起動中..."
 
     /// Whether Image Playground (Apple Intelligence imagery) is supported on this device.
     private static var isImagePlaygroundSupported: Bool {
@@ -49,12 +57,21 @@ struct ContentView: View {
     }()
 
     var body: some View {
+        ZStack {
+            mainContent
+            if isInitialLoading {
+                splashOverlay
+            }
+        }
+    }
+
+    private var mainContent: some View {
         NavigationStack {
             List {
                 headerSection
                 statusSection
-                timelineSection
                 quickRecordSection
+                timelineSection
                 blogSection
                 syncSection
             }
@@ -102,15 +119,41 @@ struct ContentView: View {
                     },
                     onPublish: {
                         BlogPublishService.saveLocal(blogEntry)
+                        // Check if user needs to register (Tier 0 → Tier 1)
+                        let tier = AuthService.shared.currentUser?.tier ?? 0
+                        if tier < 1 {
+                            showBlogEditor = false
+                            showRegistration = true
+                            return
+                        }
                         Task {
-                            try? await BlogPublishService.publish(entry: blogEntry)
-                            profileStore.recordBlogPost()
-                            NotificationService.cancelBlogReminder()
+                            do {
+                                try await BlogPublishService.publish(entry: blogEntry)
+                                profileStore.recordBlogPost()
+                                NotificationService.cancelBlogReminder()
+                                await checkBlogStatus()
+                            } catch {
+                                print("[nehan] Blog publish failed: \(error)")
+                            }
                         }
                     },
                     isPublished: isTodayBlogPublished
                 )
                 .presentationBackground(.ultraThinMaterial)
+            }
+            .sheet(isPresented: $showRegistration) {
+                RegistrationView(onRegistered: {
+                    Task {
+                        do {
+                            try await BlogPublishService.publish(entry: blogEntry)
+                            profileStore.recordBlogPost()
+                            NotificationService.cancelBlogReminder()
+                            await checkBlogStatus()
+                        } catch {
+                            print("[nehan] Blog publish after registration failed: \(error)")
+                        }
+                    }
+                })
             }
         }
         .onAppear { setupServices() }
@@ -214,48 +257,159 @@ struct ContentView: View {
         }
     }
 
-    /// Generate context-aware message based on time, location, health data
+    /// Fallback context message when AI flavor text is unavailable.
+    /// Follows same 4 time slots as flavorTextPrompt().
     private var contextMessage: String {
+        if let ai = aiFlavorText { return ai }
+
         let hour = Calendar.current.component(.hour, from: Date())
         let loc = locationService.lastLocation
         let matched = loc.flatMap { bookmarkStore.match(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude) }
         let place = matched?.name
 
-        // Time-based greeting
         switch hour {
-        case 5..<10:
+        case 6..<12: // Morning — sleep/dream focus
             if let sleep = sleepSummary, sleep.totalMinutes > 360 {
                 return "おはようございます、よく眠れましたね"
             }
-            return "おはようございます"
-        case 10..<12:
+            return "おはようございます、今日も良い一日を"
+        case 12..<18: // Afternoon — activity focus
             if stepCount > 3000 {
-                return "午前中から\(stepCount.formatted())歩、いい調子です！"
+                return "\(stepCount.formatted())歩達成、いい調子です！"
             }
-            return "良い午前を過ごしていますね"
-        case 12..<14:
-            return "お昼ですね。少し休憩しましょう"
-        case 14..<18:
             if let p = place {
-                return "\(p)でお仕事中ですね"
+                return "\(p)でがんばっていますね"
             }
-            return "午後もがんばっていますね"
-        case 18..<21:
+            return "午後もアクティブにいきましょう"
+        case 18..<24: // Evening — wind down
             if stepCount > 6000 {
-                return "今日は\(stepCount.formatted())歩！よく動きました"
+                return "今日は\(stepCount.formatted())歩、お疲れさま"
             }
-            return "お疲れさまでした"
-        case 21..<24:
-            if let p = place {
-                return "こんな時間まで\(p)ですか、元気ですね！"
-            }
-            return "そろそろ休みましょう"
-        default:
-            if let sleep = sleepSummary, sleep.totalMinutes < 300 {
-                return "睡眠が少なめです、早めに休みましょう"
-            }
-            return "夜更かし中ですか？"
+            return "お疲れさま、そろそろ休みましょう"
+        default: // 0..<6 — late night chill
+            return "深夜ですね、ゆっくり休んでください"
         }
+    }
+
+    // MARK: - Splash Overlay
+
+    private var splashOverlay: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            VStack(spacing: 24) {
+                Spacer()
+
+                // App logo
+                Text("N")
+                    .font(.system(size: 80, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text("nehan.ai")
+                    .font(.title2)
+                    .foregroundStyle(.white.opacity(0.8))
+
+                Spacer()
+
+                // Progress bar
+                VStack(spacing: 8) {
+                    ProgressView(value: loadingProgress)
+                        .tint(.purple)
+                        .scaleEffect(y: 2)
+                        .padding(.horizontal, 60)
+
+                    Text(loadingStatus)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                .padding(.bottom, 60)
+            }
+        }
+        .transition(.opacity)
+    }
+
+    // MARK: - Flavor Text
+
+    /// Generate AI flavor text using on-device Foundation Models
+    /// System prompt varies by time of day (see AGENTS.md §FlavorText)
+    private func generateFlavorText() async {
+        guard #available(iOS 26.0, *), FoundationModelService.isAvailable else { return }
+
+        let hour = Calendar.current.component(.hour, from: Date())
+        let loc = locationService.lastLocation
+        let matched = loc.flatMap { bookmarkStore.match(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude) }
+        let lang = profileStore.profile.language.rawValue
+
+        // Build health context
+        var context = "Time: \(hour):00."
+        if let sleep = sleepSummary {
+            context += " Sleep: \(sleep.totalMinutes / 60)h\(sleep.totalMinutes % 60)m."
+        }
+        if stepCount > 0 { context += " Steps: \(stepCount)." }
+        if let hr = heartRate {
+            context += " Heart rate avg: \(hr.average) bpm, max: \(hr.max) bpm."
+            if let resting = hr.resting { context += " Resting: \(resting) bpm." }
+            if let hrv = hr.hrv { context += " HRV: \(Int(hrv))ms." }
+        }
+        if let place = matched?.name { context += " Location: \(place)." }
+        if let som = stateOfMind { context += " Mood: \(som.labels.joined(separator: ", "))." }
+        if profileStore.profile.currentStreak > 0 {
+            context += " Blog streak: \(profileStore.profile.currentStreak) days."
+        }
+
+        let prompt = Self.flavorTextPrompt(hour: hour, lang: lang, context: context)
+
+        do {
+            if #available(iOS 26.0, *) {
+                let raw = try await FoundationModelService.generate(prompt: prompt)
+                let cleaned = raw
+                    .replacingOccurrences(of: "\n", with: "")
+                    .replacingOccurrences(of: "\r", with: "")
+                    .replacingOccurrences(of: "\"", with: "")
+                    .replacingOccurrences(of: "**", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cleaned.isEmpty {
+                    aiFlavorText = String(cleaned.prefix(40))
+                }
+            }
+        } catch {
+            print("[nehan] Flavor text generation failed: \(error)")
+        }
+    }
+
+    /// Time-based system prompt for flavor text generation.
+    /// Designed for extensibility: events, promotions, seasons can override.
+    /// See AGENTS.md §FlavorText for full specification.
+    static func flavorTextPrompt(hour: Int, lang: String, context: String, event: String? = nil) -> String {
+        let langName = lang == "ja" ? "Japanese" : "English"
+
+        // Event/promotion override
+        if let event {
+            return """
+            You are a friendly wellness companion. \(event) Based on the user's data, generate ONE short message (max 40 characters) in \(langName). No quotes, no markdown, just plain text.
+
+            Context: \(context)
+            """
+        }
+
+        // Time-based persona
+        let persona: String
+        switch hour {
+        case 6..<12:
+            persona = "Greet with 'Good morning!' energy. Comment on their sleep quality or dreams if data is available. Be bright and encouraging for the day ahead."
+        case 12..<18:
+            persona = "Be an active supporter. Encourage their activity, steps, and movement. Be energetic and motivating for the afternoon."
+        case 18..<24:
+            persona = "Acknowledge their hard work today. Gently ask about bedtime plans or winding down. Be warm and appreciative."
+        default: // 0..<6
+            persona = "It's late night / early morning. Promote relaxation and chill. If they're still up, gently suggest rest. Be calm and soothing."
+        }
+
+        return """
+        You are a friendly wellness companion. \(persona) Based on the user's health data, generate ONE short encouraging message (max 40 characters) in \(langName). Output ONLY the plain message text. No language codes, no quotes, no markdown, no explanation.
+
+        Context: \(context)
+        """
     }
 
     // MARK: - Status (Row 1: tracking + buffer + sync / Row 2: GPS + coord memo)
@@ -408,7 +562,10 @@ struct ContentView: View {
             TimelineBarView(
                 sleepSummary: sleepSummary,
                 stepCount: stepCount,
-                heartRate: heartRate
+                heartRate: heartRate,
+                naps: naps,
+                heartRatePoints: heartRateTimeline,
+                locationHistory: locationService.recentLocations
             )
 
             // Health data icons (monochrome)
@@ -463,6 +620,46 @@ struct ContentView: View {
                         .font(.caption2)
                 }
                 .foregroundStyle(.secondary)
+            }
+
+            // Heart rate detail
+            if let hr = heartRate {
+                HStack(spacing: 10) {
+                    Label("avg \(hr.average)", systemImage: "heart.fill")
+                        .font(.caption2)
+                    Label("max \(hr.max)", systemImage: "heart.bolt.fill")
+                        .font(.caption2)
+                        .foregroundStyle(hr.max > 150 ? .red : .secondary)
+                    if let resting = hr.resting {
+                        Label("rest \(resting)", systemImage: "heart.circle")
+                            .font(.caption2)
+                    }
+                    if let hrv = hr.hrv {
+                        Label("HRV \(Int(hrv))ms", systemImage: "waveform.path.ecg")
+                            .font(.caption2)
+                            .foregroundStyle(hrv < 20 ? .orange : .secondary)
+                    }
+                }
+                .foregroundStyle(.secondary)
+            }
+
+            // Naps (daytime sleep)
+            if !naps.isEmpty {
+                ForEach(naps, id: \.startTime) { nap in
+                    HStack(spacing: 8) {
+                        Image(systemName: "zzz")
+                            .font(.caption2)
+                            .foregroundStyle(.purple)
+                        Text("\(nap.startTime.formatted(date: .omitted, time: .shortened))〜\(nap.endTime.formatted(date: .omitted, time: .shortened))")
+                            .font(.caption2)
+                        Text("\(nap.durationMinutes)分")
+                            .font(.caption2)
+                            .bold()
+                        Text(nap.evaluation)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         } header: {
             HStack {
@@ -527,22 +724,38 @@ struct ContentView: View {
                     Label("今日のブログを自動作文する", systemImage: "doc.text")
                 }
             }
+            if publishedBlogURL != nil {
+                Button(role: .destructive) {
+                    Task {
+                        do {
+                            try await unpublishBlog()
+                        } catch {
+                            print("[nehan] Unpublish failed: \(error)")
+                        }
+                    }
+                } label: {
+                    Label("下書きに戻す", systemImage: "arrow.uturn.backward")
+                        .font(.subheadline)
+                }
+            }
         } header: {
             HStack {
                 Text("ブログ")
                 Spacer()
-                if isTodayBlogPublished {
+                if let blogURL = publishedBlogURL {
                     Button {
-                        let username = profileStore.profile.displayName.isEmpty ? "o_ob" : profileStore.profile.displayName
-                        let dateStr = BlogEntry.todayDateString.replacingOccurrences(of: "-", with: "").dropFirst(2)
-                        if let url = URL(string: "https://nehan.ai/\(username)/\(dateStr)") {
+                        if let url = URL(string: blogURL) {
                             UIApplication.shared.open(url)
                         }
                     } label: {
-                        Label("投稿済み", systemImage: "checkmark.circle.fill")
+                        Label("公開済み", systemImage: "checkmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(.green)
                     }
+                } else if isTodayBlogPublished {
+                    Label("投稿済み", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
                 } else {
                     Text("\(profileStore.profile.blogPublishHour)時に自動投稿")
                         .font(.caption)
@@ -580,6 +793,7 @@ struct ContentView: View {
                     Task {
                         await SyncService.shared.sync()
                         lastSyncTime = Date()
+                        await checkBlogStatus()
                     }
                 } label: {
                     Label("今すぐ同期", systemImage: "arrow.triangle.2.circlepath")
@@ -720,6 +934,15 @@ struct ContentView: View {
                 else { qualityEval = "浅め" }
 
                 sleepText += "\n量: \(quantityEval) / 質: \(qualityEval)"
+
+                // Append nap info
+                if !naps.isEmpty {
+                    sleepText += "\n\n昼寝（Naps）:"
+                    for nap in naps {
+                        sleepText += "\n\(nap.startTime.formatted(date: .omitted, time: .shortened))〜\(nap.endTime.formatted(date: .omitted, time: .shortened)) \(nap.durationMinutes)分 — \(nap.evaluation)"
+                    }
+                }
+
                 entry.sleepInfo = sleepText
             }
 
@@ -769,6 +992,7 @@ struct ContentView: View {
             places: blogEntry.placesVisited.isEmpty ? [] : [blogEntry.placesVisited],
             dreamDiary: blogEntry.dreamDiary.isEmpty ? nil : blogEntry.dreamDiary,
             feeling: blogEntry.todayFeeling.isEmpty ? nil : blogEntry.todayFeeling,
+            leftover: blogEntry.leftover.isEmpty ? nil : blogEntry.leftover,
             displayName: profileStore.profile.displayName.isEmpty ? nil : profileStore.profile.displayName
         )
 
@@ -810,7 +1034,6 @@ struct ContentView: View {
     private func setupServices() {
         locationService.onNewLocation = { [bookmarkStore] entry in
             SyncService.shared.addEntry(entry)
-            // Update lastVisitedAt outside of view body
             if let loc = LocationService.shared.lastLocation {
                 bookmarkStore.updateLastVisited(
                     latitude: loc.coordinate.latitude,
@@ -819,40 +1042,43 @@ struct ContentView: View {
             }
         }
         Task {
+            loadingStatus = "HealthKit 接続中..."
+            loadingProgress = 0.1
             try? await HealthKitService.shared.requestPermission()
 
-            // Auto-refresh if 5+ minutes since last refresh
-            let shouldAutoRefresh: Bool
-            if let last = lastAutoRefresh {
-                shouldAutoRefresh = Date().timeIntervalSince(last) > 300
-            } else {
-                shouldAutoRefresh = true
+            loadingStatus = "健康データ取得中..."
+            loadingProgress = 0.3
+            let hadSleepBefore = sleepSummary != nil
+            await refreshHealthData()
+            lastHealthTime = Date()
+
+            loadingStatus = "クラウド同期中..."
+            loadingProgress = 0.5
+            let hk = HealthKitService.shared
+            if let sleepEntry = try? await hk.fetchSleepData(for: Date()) {
+                SyncService.shared.addEntry(sleepEntry)
+            }
+            if let healthEntry = try? await hk.fetchDailyHealthData(for: Date()) {
+                SyncService.shared.addEntry(healthEntry)
+            }
+            await SyncService.shared.sync()
+            lastSyncTime = Date()
+            lastAutoRefresh = Date()
+
+            loadingStatus = "ブログ確認中..."
+            loadingProgress = 0.7
+            await checkBlogStatus()
+
+            loadingStatus = "準備完了"
+            loadingProgress = 1.0
+
+            // Show dream diary dialog if new sleep data detected
+            if !hadSleepBefore && sleepSummary != nil && blogEntry.dreamDiary.isEmpty {
+                showDreamDialog = true
             }
 
-            if shouldAutoRefresh {
-                let hadSleepBefore = sleepSummary != nil
-                await refreshHealthData()
-                lastHealthTime = Date()
-
-                // Fetch & sync health data to Cloudflare
-                let hk = HealthKitService.shared
-                if let sleepEntry = try? await hk.fetchSleepData(for: Date()) {
-                    SyncService.shared.addEntry(sleepEntry)
-                }
-                if let healthEntry = try? await hk.fetchDailyHealthData(for: Date()) {
-                    SyncService.shared.addEntry(healthEntry)
-                }
-                await SyncService.shared.sync()
-                lastSyncTime = Date()
-                lastAutoRefresh = Date()
-
-                // Show dream diary dialog if new sleep data detected
-                if !hadSleepBefore && sleepSummary != nil && blogEntry.dreamDiary.isEmpty {
-                    showDreamDialog = true
-                }
-            } else {
-                await refreshHealthData()
-                lastHealthTime = Date()
+            withAnimation(.easeOut(duration: 0.5)) {
+                isInitialLoading = false
             }
         }
         locationService.requestPermission()
@@ -871,14 +1097,71 @@ struct ContentView: View {
         await SyncService.shared.sync()
         lastHealthTime = Date()
         lastSyncTime = Date()
+        await checkBlogStatus()
+    }
+
+    /// Check if today's blog is published on the server
+    private func checkBlogStatus() async {
+        let username = AuthService.shared.currentUser?.username
+            ?? (profileStore.profile.displayName.isEmpty ? "o_ob" : profileStore.profile.displayName)
+        let dateStr = BlogEntry.todayDateString
+        let yymmdd = String(dateStr.dropFirst(2)).replacingOccurrences(of: "-", with: "")
+
+        // Check if blog exists by fetching the public page (HEAD request)
+        let blogURL = "https://nehan.ai/\(username)/\(yymmdd)"
+        guard let checkURL = URL(string: blogURL) else { return }
+
+        var request = URLRequest(url: checkURL)
+        request.httpMethod = "HEAD"
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                publishedBlogURL = blogURL
+            } else {
+                publishedBlogURL = nil
+            }
+        } catch {
+            publishedBlogURL = nil
+        }
+    }
+
+    private func unpublishBlog() async throws {
+        let dateString = BlogEntry.todayDateString
+        guard let url = URL(string: "\(AppConfig.workerURL)/api/blog") else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(AuthService.shared.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // Re-post as draft
+        let payload: [String: Any] = [
+            "date": dateString,
+            "body": blogEntry.fullText.isEmpty ? "draft" : blogEntry.fullText,
+            "title": blogEntry.title.isEmpty ? blogEntry.autoTitle : blogEntry.title,
+            "is_draft": true
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+
+        publishedBlogURL = nil
     }
 
     private func refreshHealthData() async {
         let today = Date()
         let hk = HealthKitService.shared
         sleepSummary = try? await hk.fetchSleepSummary(for: today)
+        naps = (try? await hk.fetchNaps(for: today)) ?? []
         stepCount = (try? await hk.fetchStepCount(for: today)) ?? 0
         heartRate = try? await hk.fetchHeartRateSummary(for: today)
+        heartRateTimeline = (try? await hk.fetchHeartRateTimeline(for: today)) ?? []
         mindfulSummary = try? await hk.fetchMindfulSummary(for: today)
         if #available(iOS 18.0, *) {
             stateOfMind = try? await hk.fetchStateOfMind(for: today)
@@ -886,6 +1169,8 @@ struct ContentView: View {
         if UserProfileStore.shared.isFemale {
             menstrualSummary = try? await hk.fetchMenstrualSummary(for: today)
         }
+        // Generate AI flavor text after health data is available
+        await generateFlavorText()
     }
 }
 
@@ -895,8 +1180,85 @@ struct TimelineBarView: View {
     let sleepSummary: HealthKitService.SleepSummary?
     let stepCount: Int
     let heartRate: HealthKitService.HeartRateSummary?
+    var naps: [HealthKitService.NapSummary] = []
+    var heartRatePoints: [HealthKitService.HeartRatePoint] = []
+    var locationHistory: [(time: Date, latitude: Double, longitude: Double)] = []
 
     private let cellCount = 288 // 24h * 12 (5min each)
+
+    /// Sedentary work analysis: consecutive stationary 5-min slots
+    private var sedentarySlots: [Int: SedentaryInfo] {
+        guard locationHistory.count >= 2 else { return [:] }
+        let cal = Calendar.current
+
+        // Group locations into 5-min slots
+        var slotLocations: [Int: (lat: Double, lon: Double)] = [:]
+        for loc in locationHistory {
+            let idx = cal.component(.hour, from: loc.time) * 12 + cal.component(.minute, from: loc.time) / 5
+            slotLocations[idx] = (loc.latitude, loc.longitude)
+        }
+
+        // Detect consecutive stationary periods (within 200m)
+        var result: [Int: SedentaryInfo] = [:]
+        var streakStart: Int?
+        var streakRef: (lat: Double, lon: Double)?
+
+        let sortedSlots = slotLocations.keys.sorted()
+        for slot in sortedSlots {
+            guard let loc = slotLocations[slot] else { continue }
+            if let ref = streakRef {
+                let dist = haversineMeters(lat1: ref.lat, lon1: ref.lon, lat2: loc.lat, lon2: loc.lon)
+                if dist < 200 {
+                    // Still stationary
+                    let duration = (slot - (streakStart ?? slot)) * 5 // minutes
+                    let info = SedentaryInfo(minutesSitting: duration)
+                    result[slot] = info
+                } else {
+                    // Moved — reset streak
+                    streakStart = slot
+                    streakRef = loc
+                }
+            } else {
+                streakStart = slot
+                streakRef = loc
+            }
+        }
+
+        // Back-fill streak info for all slots in each streak
+        // Re-scan to assign duration to all slots in a streak
+        var finalResult: [Int: SedentaryInfo] = [:]
+        var currentStreakStart: Int?
+        var currentRef: (lat: Double, lon: Double)?
+        for slot in sortedSlots {
+            guard let loc = slotLocations[slot] else { continue }
+            if let ref = currentRef, let start = currentStreakStart {
+                let dist = haversineMeters(lat1: ref.lat, lon1: ref.lon, lat2: loc.lat, lon2: loc.lon)
+                if dist < 200 {
+                    let duration = (slot - start + 1) * 5
+                    // Update all slots in this streak
+                    for s in start...slot {
+                        finalResult[s] = SedentaryInfo(minutesSitting: duration)
+                    }
+                    continue
+                }
+            }
+            currentStreakStart = slot
+            currentRef = loc
+        }
+        return finalResult
+    }
+
+    /// HR values bucketed into 5-min slots (average per slot)
+    private var hrSlots: [Int: Int] {
+        guard !heartRatePoints.isEmpty else { return [:] }
+        let cal = Calendar.current
+        var buckets: [Int: [Int]] = [:]
+        for p in heartRatePoints {
+            let idx = cal.component(.hour, from: p.time) * 12 + cal.component(.minute, from: p.time) / 5
+            buckets[idx, default: []].append(p.bpm)
+        }
+        return buckets.mapValues { values in values.reduce(0, +) / values.count }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -911,37 +1273,96 @@ struct TimelineBarView: View {
                 }
             }
 
-            // Timeline cells
+            // Activity timeline with heart rate sparkline overlay
             GeometryReader { geo in
                 let cellWidth = geo.size.width / CGFloat(cellCount)
-                HStack(spacing: 0) {
-                    ForEach(0..<cellCount, id: \.self) { index in
-                        Rectangle()
-                            .fill(cellColor(for: index))
-                            .frame(width: max(cellWidth, 0.5), height: 16)
+                let barHeight: CGFloat = 20
+                ZStack(alignment: .bottom) {
+                    // Activity colors (background)
+                    HStack(spacing: 0) {
+                        ForEach(0..<cellCount, id: \.self) { index in
+                            Rectangle()
+                                .fill(cellColor(for: index))
+                                .frame(width: max(cellWidth, 0.5), height: barHeight)
+                        }
+                    }
+
+                    // Heart rate sparkline (overlay)
+                    if !heartRatePoints.isEmpty {
+                        let maxHR = heartRatePoints.map(\.bpm).max() ?? 180
+                        let minHR = heartRatePoints.map(\.bpm).min() ?? 40
+                        let range = max(Double(maxHR - minHR), 1.0)
+                        HStack(spacing: 0) {
+                            ForEach(0..<cellCount, id: \.self) { index in
+                                if let bpm = hrSlots[index] {
+                                    let h = max(2, (barHeight - 2) * (Double(bpm - minHR) / range))
+                                    VStack(spacing: 0) {
+                                        Spacer(minLength: 0)
+                                        Rectangle()
+                                            .fill(hrColor(bpm: bpm))
+                                            .frame(width: max(cellWidth, 0.5), height: h)
+                                    }
+                                } else {
+                                    Color.clear
+                                        .frame(width: max(cellWidth, 0.5), height: barHeight)
+                                }
+                            }
+                        }
                     }
                 }
             }
-            .frame(height: 16)
+            .frame(height: 20)
             .clipShape(RoundedRectangle(cornerRadius: 3))
 
             // Legend
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 legendItem(color: .purple.opacity(0.7), label: "睡眠")
-                legendItem(color: .blue.opacity(0.7), label: "活動")
-                legendItem(color: .yellow.opacity(0.5), label: "静止")
-                legendItem(color: .secondary.opacity(0.15), label: "未記録")
+                if !naps.isEmpty {
+                    legendItem(color: .indigo.opacity(0.5), label: "昼寝")
+                }
+                legendItem(color: .green.opacity(0.6), label: "活動")
+                legendItem(color: .blue.opacity(0.5), label: "座位")
+                legendItem(color: .orange.opacity(0.6), label: "4h+")
+                legendItem(color: .red.opacity(0.7), label: "8h+")
+                if !heartRatePoints.isEmpty {
+                    legendItem(color: .pink.opacity(0.5), label: "HR")
+                }
             }
-            .font(.system(size: 9))
+            .font(.system(size: 10))
+
+            // Help text for work/sedentary colors
+            Text("座位: 同じ場所に30分以上滞在。4h+/8h+は連続座位時間。HRは心拍スパークライン")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+
+            // Sedentary work summary
+            if let maxSitting = sedentarySlots.values.map(\.minutesSitting).max(), maxSitting >= 60 {
+                let hours = maxSitting / 60
+                let mins = maxSitting % 60
+                HStack(spacing: 4) {
+                    Image(systemName: maxSitting >= 480 ? "exclamationmark.triangle.fill" : "chair.fill")
+                        .font(.caption2)
+                        .foregroundStyle(maxSitting >= 480 ? .red : maxSitting >= 240 ? .orange : .blue)
+                    Text("最長連続座位: \(hours)h\(mins)m")
+                        .font(.caption2)
+                    if maxSitting >= 480 {
+                        Text("過集中注意")
+                            .font(.caption2)
+                            .bold()
+                            .foregroundStyle(.red)
+                    }
+                }
+                .foregroundStyle(.secondary)
+            }
         }
     }
 
     private func cellColor(for index: Int) -> Color {
-        let hour = index / 12
+        let cal = Calendar.current
 
-        // Sleep time estimation
+        // Sleep time
         if let sleep = sleepSummary, let asleep = sleep.asleep, let awake = sleep.awake {
-            let cal = Calendar.current
             let sleepHour = cal.component(.hour, from: asleep)
             let sleepMin = cal.component(.minute, from: asleep)
             let wakeHour = cal.component(.hour, from: awake)
@@ -951,7 +1372,6 @@ struct TimelineBarView: View {
             let wakeIndex = wakeHour * 12 + wakeMin / 5
 
             if sleepIndex > wakeIndex {
-                // Overnight sleep
                 if index >= sleepIndex || index < wakeIndex {
                     return .purple.opacity(0.7)
                 }
@@ -962,34 +1382,79 @@ struct TimelineBarView: View {
             }
         }
 
-        // Current time marker
-        let now = Calendar.current
-        let currentIndex = now.component(.hour, from: Date()) * 12 + now.component(.minute, from: Date()) / 5
-        if index > currentIndex {
-            return .secondary.opacity(0.08) // future
+        // Nap time
+        for nap in naps {
+            let napStartIndex = cal.component(.hour, from: nap.startTime) * 12 + cal.component(.minute, from: nap.startTime) / 5
+            let napEndIndex = cal.component(.hour, from: nap.endTime) * 12 + cal.component(.minute, from: nap.endTime) / 5
+            if index >= napStartIndex && index < napEndIndex {
+                return .indigo.opacity(0.5)
+            }
         }
 
-        // Approximate: daytime with steps = active
+        // Future
+        let currentIndex = cal.component(.hour, from: Date()) * 12 + cal.component(.minute, from: Date()) / 5
+        if index > currentIndex {
+            return .secondary.opacity(0.08)
+        }
+
+        // Sedentary work detection (from location data)
+        if let sedentary = sedentarySlots[index] {
+            if sedentary.minutesSitting >= 480 {
+                return .red.opacity(0.7)    // 8h+ overwork
+            } else if sedentary.minutesSitting >= 240 {
+                return .orange.opacity(0.6) // 4-8h long sitting
+            } else if sedentary.minutesSitting >= 30 {
+                return .blue.opacity(0.5)   // normal work
+            }
+        }
+
+        // Has heart rate data → at least alive/active
+        if hrSlots[index] != nil {
+            return .green.opacity(0.4)
+        }
+
+        // Daytime with steps = active
+        let hour = index / 12
         if stepCount > 0 && hour >= 7 && hour <= 22 {
-            return .blue.opacity(0.5)
+            return .green.opacity(0.4)
         }
 
         if hour >= 7 && hour <= 22 {
-            return .yellow.opacity(0.3) // stationary
+            return .secondary.opacity(0.2) // awake but no data
         }
 
-        return .secondary.opacity(0.15) // no data
+        return .secondary.opacity(0.1) // no data
+    }
+
+    /// Heart rate bar color: green = normal, orange = elevated, red = high
+    private func hrColor(bpm: Int) -> Color {
+        if bpm >= 150 { return .red.opacity(0.8) }
+        if bpm >= 100 { return .orange.opacity(0.7) }
+        return .pink.opacity(0.5)
     }
 
     private func legendItem(color: Color, label: String) -> some View {
         HStack(spacing: 3) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(color)
-                .frame(width: 8, height: 8)
+                .frame(width: 9, height: 9)
             Text(label)
                 .foregroundStyle(.secondary)
         }
     }
+
+    private func haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double) -> Double {
+        let R = 6371000.0
+        let toRad = { (d: Double) in d * .pi / 180 }
+        let dLat = toRad(lat2 - lat1)
+        let dLon = toRad(lon2 - lon1)
+        let a = sin(dLat / 2) * sin(dLat / 2) + cos(toRad(lat1)) * cos(toRad(lat2)) * sin(dLon / 2) * sin(dLon / 2)
+        return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+    }
+}
+
+struct SedentaryInfo {
+    let minutesSitting: Int
 }
 
 // MARK: - Coordinate Memo Edit Sheet (Glass)

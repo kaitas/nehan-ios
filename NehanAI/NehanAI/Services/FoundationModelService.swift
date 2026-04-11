@@ -9,6 +9,15 @@ enum FoundationModelService {
         SystemLanguageModel.default.isAvailable
     }
 
+    /// Generate a short text response from a free-form prompt.
+    /// Returns empty string when Apple Intelligence is unavailable.
+    static func generate(prompt: String) async throws -> String {
+        guard isAvailable else { return "" }
+        let session = LanguageModelSession()
+        let response = try await session.respond(to: prompt)
+        return response.content
+    }
+
     /// Generate a natural Japanese blog entry from health/location context.
     /// Falls back to a template-based summary when Apple Intelligence is not supported.
     static func generateBlog(context: BlogContext) async throws -> String {
@@ -63,6 +72,7 @@ enum FoundationModelService {
         var places: [String]
         var dreamDiary: String?
         var feeling: String?
+        var leftover: String?
         var displayName: String?
     }
 
@@ -82,6 +92,7 @@ enum FoundationModelService {
         if !context.places.isEmpty { lines.append("訪問場所: \(context.places.joined(separator: "、"))") }
         if let d = context.dreamDiary, !d.isEmpty { lines.append("夢日記: \(d)") }
         if let f = context.feeling, !f.isEmpty { lines.append("今日の気持ち: \(f)") }
+        if let l = context.leftover, !l.isEmpty { lines.append("やり残したこと: \(l)") }
         return lines.joined(separator: "\n")
     }
 }

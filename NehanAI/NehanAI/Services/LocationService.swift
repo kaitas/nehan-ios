@@ -11,6 +11,8 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     @Published var lastLocation: CLLocation?
     @Published var isTracking = false
+    /// Recent locations for timeline visualization (kept for current day)
+    @Published var recentLocations: [(time: Date, latitude: Double, longitude: Double)] = []
 
     var onNewLocation: ((LogEntry) -> Void)?
 
@@ -44,6 +46,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
             let lat = location.coordinate.latitude
             let lon = location.coordinate.longitude
+
+            // Track for timeline visualization
+            self.recentLocations.append((time: location.timestamp, latitude: lat, longitude: lon))
 
             // 座標メモ照合
             if let bookmark = PlaceBookmarkStore.shared.match(latitude: lat, longitude: lon) {

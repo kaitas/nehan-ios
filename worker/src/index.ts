@@ -1,13 +1,26 @@
 import { Hono } from 'hono';
-import { bearerAuth } from 'hono/bearer-auth';
+import { iosToSContent, serviceToSContent } from './legal';
+import adminApp from './admin';
 
 type Bindings = {
   DB: D1Database;
   COVERS: R2Bucket;
   API_TOKEN: string;
+  RESEND_API_KEY: string;
+  ADMIN_TOKEN: string;
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+type UserContext = {
+  id: number;
+  username: string | null;
+  tier: number;
+} | null;
+
+type Variables = {
+  user: UserContext;
+};
+
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // --- Username validation ---
 const USERNAME_REGEX = /^[a-z0-9_-]{3,12}$/;
@@ -16,7 +29,6 @@ async function validateUsername(
   db: D1Database,
   name: string
 ): Promise<{ available: boolean; reason?: string }> {
-  // Format check
   if (!name || name.length < 3) {
     return { available: false, reason: 'Username must be at least 3 characters' };
   }
@@ -27,7 +39,6 @@ async function validateUsername(
     return { available: false, reason: 'Username may only contain lowercase letters, digits, underscores, and hyphens' };
   }
 
-  // Reserved name check
   const reserved = await db.prepare(
     'SELECT 1 FROM reserved_usernames WHERE username = ?'
   ).bind(name).first();
@@ -35,13 +46,116 @@ async function validateUsername(
     return { available: false, reason: 'This username is reserved' };
   }
 
+  // Check if already taken by another user
+  const existing = await db.prepare(
+    'SELECT 1 FROM users WHERE username = ?'
+  ).bind(name).first();
+  if (existing) {
+    return { available: false, reason: 'This username is already taken' };
+  }
+
   return { available: true };
 }
 
-// Auth middleware
+// --- SHA-256 helper ---
+async function sha256(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// --- Waitlist (unauthenticated) ---
+app.post('/api/waitlist', async (c) => {
+  const { email } = await c.req.json<{ email: string }>();
+  if (!email || !email.includes('@') || !email.includes('.')) {
+    return c.json({ error: 'Valid email is required' }, 400);
+  }
+
+  try {
+    await c.env.DB.prepare(
+      'INSERT INTO waitlist (email) VALUES (?)'
+    ).bind(email.toLowerCase().trim()).run();
+  } catch (e: any) {
+    if (e.message?.includes('UNIQUE')) {
+      return c.json({ ok: true, message: 'already_registered' });
+    }
+    throw e;
+  }
+
+  // Send welcome email via Resend
+  if (c.env.RESEND_API_KEY) {
+    try {
+      await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${c.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: 'nehan.ai <noreply@nehan.ai>',
+          to: [email],
+          subject: 'nehan.ai ウェイトリストへようこそ',
+          html: `<p>nehan.ai ウェイトリストにご登録いただきありがとうございます。</p>
+<p>App Storeでのリリース時にお知らせいたします。</p>
+<p>— nehan.ai team</p>`,
+        }),
+      });
+    } catch (e) {
+      console.error('Resend waitlist email error:', e);
+    }
+  }
+
+  return c.json({ ok: true });
+});
+
+// --- Auth middleware ---
+// Looks up Bearer token via SHA-256 hash in users table.
+// Falls back to legacy API_TOKEN for GitHub Actions compatibility.
+// POST /api/register is unauthenticated.
 app.use('/api/*', async (c, next) => {
-  const auth = bearerAuth({ token: c.env.API_TOKEN });
-  return auth(c, next);
+  // Skip auth for registration and waitlist
+  if (c.req.path === '/api/waitlist' && c.req.method === 'POST') {
+    return next();
+  }
+  if (c.req.path === '/api/register' && c.req.method === 'POST') {
+    c.set('user', null);
+    return next();
+  }
+
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const token = authHeader.slice(7);
+
+  // 1. Check legacy API_TOKEN (GitHub Actions / owner compatibility)
+  if (token === c.env.API_TOKEN) {
+    // Look up owner user (id=1) or create a synthetic context
+    const owner = await c.env.DB.prepare(
+      'SELECT id, username, tier FROM users WHERE id = 1'
+    ).first();
+    if (owner) {
+      c.set('user', { id: owner.id as number, username: owner.username as string | null, tier: owner.tier as number });
+    } else {
+      // Legacy mode: no users table populated yet
+      c.set('user', { id: 0, username: 'o_ob', tier: 1 });
+    }
+    return next();
+  }
+
+  // 2. Look up per-user API key via SHA-256 hash
+  const hash = await sha256(token);
+  const user = await c.env.DB.prepare(
+    'SELECT id, username, tier FROM users WHERE api_key_hash = ?'
+  ).bind(hash).first();
+
+  if (!user) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  c.set('user', { id: user.id as number, username: user.username as string | null, tier: user.tier as number });
+  return next();
 });
 
 // --- 共通HTMLレイアウト ---
@@ -77,6 +191,7 @@ function pageLayout(title: string, body: string, lang: string = 'ja'): string {
     .legal-content p, .legal-content li { font-size: 0.95rem; margin-bottom: 0.5rem; }
     .legal-content ul { padding-left: 1.5rem; }
     .legal-content ol { padding-left: 1.5rem; }
+    .legal-content table { font-size: 0.95rem; }
     .legal-footer { border-top: 1px solid #eee; margin-top: 3rem; padding-top: 1.5rem; font-size: 0.85rem; color: #888; text-align: center; }
     .legal-footer a { color: #4B0082; text-decoration: none; margin: 0 0.5rem; }
     .lang-switcher { text-align: right; margin-bottom: 1rem; font-size: 0.85rem; }
@@ -104,7 +219,7 @@ app.get('/privacy', (c) => c.redirect('/terms/privacy/ja', 301));
 app.get('/terms', (c) => c.redirect('/terms/tos/ja', 301));
 
 // --- Language switcher helper ---
-function langSwitcher(section: 'privacy' | 'tos', currentLang: string): string {
+function langSwitcher(section: string, currentLang: string): string {
   const langs = [
     { code: 'ja', label: '日本語' },
     { code: 'en', label: 'English' },
@@ -127,7 +242,7 @@ app.get('/terms/privacy/:lang', (c) => {
 
     <h2>1. Operator</h2>
     <p>AICU Inc. operates the "nehan.ai" service.</p>
-    <p>Privacy inquiries: <a href="mailto:privacy@aicu.ai">privacy@aicu.ai</a></p>
+    <p>Privacy inquiries: <a href="mailto:nehan@aicu.ai">nehan@aicu.ai</a></p>
     <p>See also: <a href="https://corp.aicu.ai/ja/privacy" target="_blank">AICU Inc. Privacy Policy</a></p>
 
     <h2>2. Data We Collect</h2>
@@ -155,7 +270,7 @@ app.get('/terms/privacy/:lang', (c) => {
     <p>We do not sell or share your data with third parties. HealthKit data is never used for advertising purposes.</p>
 
     <h2>7. Data Retention and Deletion</h2>
-    <p>You may request deletion of all your data by contacting <a href="mailto:privacy@aicu.ai">privacy@aicu.ai</a>. We will delete all data within 30 days of the request.</p>
+    <p>You may delete your account and all associated data through the app settings. You may also request deletion by contacting <a href="mailto:nehan@aicu.ai">nehan@aicu.ai</a>. We will delete all data within 30 days.</p>
 
     <h2>8. Cookies</h2>
     <p>This service does not use cookies. API authentication uses Bearer tokens.</p>
@@ -164,7 +279,7 @@ app.get('/terms/privacy/:lang', (c) => {
     <p>This service is not intended for children under 13. We do not knowingly collect data from children under 13.</p>
 
     <h2>10. Changes to This Policy</h2>
-    <p>Changes will be posted on this page.</p>
+    <p>Changes will be posted on this page. Registered users will be notified via email.</p>
     `, 'en');
     return c.html(html);
   }
@@ -177,7 +292,7 @@ app.get('/terms/privacy/:lang', (c) => {
 
     <h2>1. 運営者</h2>
     <p>AICU Inc. が本サービス「nehan.ai」を運営しています。</p>
-    <p>プライバシーに関するお問い合わせ: <a href="mailto:privacy@aicu.ai">privacy@aicu.ai</a></p>
+    <p>プライバシーに関するお問い合わせ: <a href="mailto:nehan@aicu.ai">nehan@aicu.ai</a></p>
     <p>AICU Inc. のプライバシーポリシー: <a href="https://corp.aicu.ai/ja/privacy" target="_blank">corp.aicu.ai/ja/privacy</a></p>
 
     <h2>2. 収集するデータ</h2>
@@ -205,7 +320,7 @@ app.get('/terms/privacy/:lang', (c) => {
     <p>収集したデータを第三者に提供・販売することはありません。広告目的でHealthKitデータを使用することもありません。</p>
 
     <h2>7. データの保持と削除</h2>
-    <p>ユーザーは <a href="mailto:privacy@aicu.ai">privacy@aicu.ai</a> に連絡することで、保存されたすべてのデータの削除を要求できます。要求から30日以内にデータを削除します。</p>
+    <p>ユーザーはアプリの設定からアカウントおよび関連データをすべて削除できます。また、<a href="mailto:nehan@aicu.ai">nehan@aicu.ai</a> に連絡することでも削除を要求できます。要求から30日以内にデータを削除します。</p>
 
     <h2>8. Cookieの使用</h2>
     <p>本サービスはCookieを使用しません。API認証にはBearerトークンを使用しています。</p>
@@ -214,123 +329,31 @@ app.get('/terms/privacy/:lang', (c) => {
     <p>本サービスは13歳未満の児童を対象としていません。13歳未満の児童のデータを意図的に収集することはありません。</p>
 
     <h2>10. ポリシーの変更</h2>
-    <p>本ポリシーを変更する場合は、本ページにて告知します。</p>
+    <p>本ポリシーを変更する場合は、本ページにて告知します。登録ユーザーにはメールで通知します。</p>
   `, 'ja');
   return c.html(html);
 });
 
-// GET /terms/tos/:lang — 利用規約 (multi-language)
+// GET /terms/tos/:lang — 利用規約 (existing simple ToS, kept for backward compatibility)
 app.get('/terms/tos/:lang', (c) => {
   const lang = c.req.param('lang');
+  const content = serviceToSContent(lang);
+  return c.html(pageLayout(
+    lang === 'en' ? 'Terms of Service' : '利用規約',
+    `${langSwitcher('tos', lang)}${content}`,
+    lang
+  ));
+});
 
-  if (lang === 'en') {
-    const html = pageLayout('Terms of Service', `
-    ${langSwitcher('tos', 'en')}
-    <h1>Terms of Service</h1>
-    <p>Last updated: April 11, 2026</p>
-
-    <h2>Article 1 (Service Description)</h2>
-    <p>"nehan.ai" (hereinafter "the Service") is a life log recording and automatic daily report generation service provided by AICU Inc. (hereinafter "the Operator"). Through the iOS application, the Service records location data, HealthKit data, and memos, organizing and delivering them as daily reports.</p>
-
-    <h2>Article 2 (Terms of Use)</h2>
-    <ul>
-      <li>Use of this Service requires an iOS device and an internet connection.</li>
-      <li>Explicit user permission is required to access HealthKit data.</li>
-      <li>Explicit user permission is required to access location data.</li>
-    </ul>
-
-    <h2>Article 3 (Username Rules)</h2>
-    <p>Users who register an account must choose a username subject to the following rules:</p>
-    <ol>
-      <li>Usernames must be unique across the service.</li>
-      <li>Usernames must be between 3 and 12 characters long.</li>
-      <li>Only lowercase alphanumeric characters, underscores (_), and hyphens (-) are permitted.</li>
-      <li>Email verification is required to complete registration.</li>
-      <li>Free-tier users cannot change their username once it has been set.</li>
-      <li>The Operator maintains a list of reserved usernames that are not available for registration.</li>
-    </ol>
-
-    <h2>Article 4 (Prohibited Activities)</h2>
-    <ul>
-      <li>Unauthorized use of the API, decompilation, or reverse engineering</li>
-      <li>Unauthorized use of another person's account or tokens</li>
-      <li>Placing excessive load on the servers</li>
-      <li>Any activity that violates laws or public order and morals</li>
-    </ul>
-
-    <h2>Article 5 (Disclaimer)</h2>
-    <ul>
-      <li>The accuracy of location data is not guaranteed.</li>
-      <li>The accuracy of HealthKit data depends on Apple HealthKit; the Operator does not guarantee it.</li>
-      <li>The Operator is not liable for damages caused by service interruptions or outages.</li>
-      <li>The Operator is not liable for delays or missing daily reports.</li>
-    </ul>
-
-    <h2>Article 6 (Data Handling)</h2>
-    <p>Please refer to our <a href="/terms/privacy/en">Privacy Policy</a> for information on how user data is handled.</p>
-
-    <h2>Article 7 (Changes and Termination of Service)</h2>
-    <p>The Operator may change or terminate the Service without prior notice.</p>
-
-    <h2>Article 8 (Governing Law and Jurisdiction)</h2>
-    <p>These terms are governed by the laws of Japan. In the event of a dispute, the Tokyo District Court shall be the court of exclusive jurisdiction in the first instance.</p>
-    `, 'en');
-    return c.html(html);
-  }
-
-  // Default: Japanese
-  const html = pageLayout('利用規約', `
-    ${langSwitcher('tos', 'ja')}
-    <h1>利用規約</h1>
-    <p>最終更新日: 2026年4月11日</p>
-
-    <h2>第1条（サービス内容）</h2>
-    <p>「nehan.ai」（以下「本サービス」）は、AICU Inc.（以下「運営者」）が提供するライフログ記録・日報自動生成サービスです。iOSアプリを通じて位置情報・HealthKitデータ・メモを記録し、日報として整理・通知します。</p>
-
-    <h2>第2条（利用条件）</h2>
-    <ul>
-      <li>本サービスの利用にはiOSデバイスおよびインターネット接続が必要です。</li>
-      <li>HealthKitデータの取得にはユーザーの明示的な許可が必要です。</li>
-      <li>位置情報の取得にはユーザーの明示的な許可が必要です。</li>
-    </ul>
-
-    <h2>第3条（ユーザー名に関する規則）</h2>
-    <p>アカウントを登録するユーザーは、以下の規則に従ってユーザー名を選択する必要があります。</p>
-    <ol>
-      <li>ユーザー名はサービス全体で一意である必要があります。</li>
-      <li>ユーザー名は3文字以上12文字以下とします。</li>
-      <li>使用できる文字は半角英小文字、数字、アンダースコア（_）、ハイフン（-）のみです。</li>
-      <li>登録の完了にはメールアドレスの認証が必要です。</li>
-      <li>無料ユーザーは、一度設定したユーザー名を変更することはできません。</li>
-      <li>運営者が定める予約済みユーザー名は登録できません。</li>
-    </ol>
-
-    <h2>第4条（禁止事項）</h2>
-    <ul>
-      <li>APIの不正利用・逆コンパイル・リバースエンジニアリング</li>
-      <li>他者のアカウントやトークンの不正使用</li>
-      <li>サーバーへの過度な負荷をかける行為</li>
-      <li>法令または公序良俗に反する行為</li>
-    </ul>
-
-    <h2>第5条（免責事項）</h2>
-    <ul>
-      <li>位置情報の正確性を保証するものではありません。</li>
-      <li>HealthKitデータの正確性はApple HealthKitに依存し、運営者は保証しません。</li>
-      <li>サービスの中断・停止により生じた損害について、運営者は責任を負いません。</li>
-      <li>日報生成の遅延・欠損について、運営者は責任を負いません。</li>
-    </ul>
-
-    <h2>第6条（データの取り扱い）</h2>
-    <p>ユーザーデータの取り扱いについては<a href="/terms/privacy/ja">プライバシーポリシー</a>をご参照ください。</p>
-
-    <h2>第7条（サービスの変更・終了）</h2>
-    <p>運営者は、事前の告知なくサービス内容の変更・終了を行うことがあります。</p>
-
-    <h2>第8条（準拠法・管轄）</h2>
-    <p>本規約は日本法に準拠し、紛争が生じた場合は東京地方裁判所を第一審の専属的合意管轄裁判所とします。</p>
-  `, 'ja');
-  return c.html(html);
+// GET /terms/ios-tos/:lang — iOS App specific ToS (lightweight, for Guest users)
+app.get('/terms/ios-tos/:lang', (c) => {
+  const lang = c.req.param('lang');
+  const content = iosToSContent(lang);
+  return c.html(pageLayout(
+    lang === 'en' ? 'iOS App Terms of Service' : 'iOSアプリ利用規約',
+    `${langSwitcher('ios-tos', lang)}${content}`,
+    lang
+  ));
 });
 
 // GET /dashboard — ダッシュボード（プレースホルダー）
@@ -338,10 +361,103 @@ app.get('/dashboard', (c) => {
   const html = pageLayout('ダッシュボード', `
     <h1>ダッシュボード</h1>
     <p style="margin-top: 2rem; text-align: center; color: #888; font-size: 1.1rem;">
-      🚧 準備中です。ログイン機能とダッシュボードは今後のアップデートで実装予定です。
+      準備中です。ログイン機能とダッシュボードは今後のアップデートで実装予定です。
     </p>
   `);
   return c.html(html);
+});
+
+// Admin Dashboard (Basic Auth protected, no GA4 tag)
+app.route('/admin', adminApp);
+
+// ==================== API Endpoints ====================
+
+// POST /api/register — Guest registration (unauthenticated)
+app.post('/api/register', async (c) => {
+  const { device_id } = await c.req.json<{ device_id: string }>();
+  if (!device_id) {
+    return c.json({ error: 'device_id is required' }, 400);
+  }
+
+  // Generate new API key
+  const apiKey = crypto.randomUUID() + '-' + crypto.randomUUID();
+  const apiKeyHash = await sha256(apiKey);
+
+  // Check if device already registered (e.g. app reinstall)
+  const existing = await c.env.DB.prepare(
+    'SELECT id, tier FROM users WHERE device_id = ?'
+  ).bind(device_id).first();
+
+  if (existing) {
+    // Re-issue API key for existing device (preserves tier, username, etc.)
+    await c.env.DB.prepare(
+      'UPDATE users SET api_key_hash = ? WHERE id = ?'
+    ).bind(apiKeyHash, existing.id).run();
+    return c.json({ ok: true, api_key: apiKey, user_id: existing.id as number, tier: existing.tier as number });
+  }
+
+  // New device registration (Tier 0 = Guest)
+  await c.env.DB.prepare(
+    'INSERT INTO users (api_key_hash, device_id, tier) VALUES (?, ?, 0)'
+  ).bind(apiKeyHash, device_id).run();
+
+  const user = await c.env.DB.prepare(
+    'SELECT id FROM users WHERE device_id = ?'
+  ).bind(device_id).first();
+
+  return c.json({ ok: true, api_key: apiKey, user_id: user?.id ?? 0, tier: 0 });
+});
+
+// GET /api/me — Current user profile
+app.get('/api/me', async (c) => {
+  const user = c.get('user');
+  if (!user || user.id === 0) {
+    return c.json({ error: 'Not authenticated' }, 401);
+  }
+
+  const row = await c.env.DB.prepare(
+    'SELECT id, username, email, email_verified_at, tier, tos_accepted_at, device_id, created_at FROM users WHERE id = ?'
+  ).bind(user.id).first();
+
+  if (!row) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+
+  return c.json(row);
+});
+
+// PUT /api/me/demographics — update user demographics (language, gender, birth_year)
+app.put('/api/me/demographics', async (c) => {
+  const user = c.get('user');
+  if (!user || user.id === 0) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const { language, gender, birth_year } = await c.req.json<{
+    language?: string;
+    gender?: string;
+    birth_year?: number;
+  }>();
+
+  // Validate inputs
+  const validLanguages = ['ja', 'en', 'zh-Hans', 'zh-Hant'];
+  const validGenders = ['male', 'female', 'other', 'preferNotToSay'];
+
+  if (language && !validLanguages.includes(language)) {
+    return c.json({ error: 'Invalid language' }, 400);
+  }
+  if (gender && !validGenders.includes(gender)) {
+    return c.json({ error: 'Invalid gender' }, 400);
+  }
+  if (birth_year && (birth_year < 1900 || birth_year > new Date().getFullYear())) {
+    return c.json({ error: 'Invalid birth_year' }, 400);
+  }
+
+  await c.env.DB.prepare(
+    'UPDATE users SET language = COALESCE(?, language), gender = COALESCE(?, gender), birth_year = COALESCE(?, birth_year) WHERE id = ?'
+  ).bind(language ?? null, gender ?? null, birth_year ?? null, user.id).run();
+
+  return c.json({ ok: true });
 });
 
 // GET /api/username/check?name=xxx — ユーザー名の利用可否チェック
@@ -356,6 +472,7 @@ app.get('/api/username/check', async (c) => {
 
 // POST /api/log — バッチログ受信
 app.post('/api/log', async (c) => {
+  const user = c.get('user');
   const { entries } = await c.req.json<{
     entries: Array<{
       timestamp: string;
@@ -369,12 +486,13 @@ app.post('/api/log', async (c) => {
 
   if (!entries?.length) return c.json({ error: 'No entries' }, 400);
 
+  const userId = user?.id ?? null;
   const stmt = c.env.DB.prepare(
-    'INSERT INTO logs (timestamp, type, latitude, longitude, place_name, payload) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO logs (timestamp, type, latitude, longitude, place_name, payload, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
 
   const batch = entries.map((e) =>
-    stmt.bind(e.timestamp, e.type, e.latitude ?? null, e.longitude ?? null, e.place_name ?? null, e.payload ?? null)
+    stmt.bind(e.timestamp, e.type, e.latitude ?? null, e.longitude ?? null, e.place_name ?? null, e.payload ?? null, userId)
   );
 
   await c.env.DB.batch(batch);
@@ -383,7 +501,17 @@ app.post('/api/log', async (c) => {
 
 // GET /api/logs?date=YYYY-MM-DD
 app.get('/api/logs', async (c) => {
+  const user = c.get('user');
   const date = c.req.query('date') ?? new Date().toISOString().slice(0, 10);
+
+  // Filter by user_id if available
+  if (user && user.id > 0) {
+    const results = await c.env.DB.prepare(
+      "SELECT * FROM logs WHERE date(timestamp, '+9 hours') = ? AND (user_id = ? OR user_id IS NULL) ORDER BY timestamp ASC"
+    ).bind(date, user.id).all();
+    return c.json(results);
+  }
+
   const results = await c.env.DB.prepare(
     "SELECT * FROM logs WHERE date(timestamp, '+9 hours') = ? ORDER BY timestamp ASC"
   ).bind(date).all();
@@ -392,8 +520,10 @@ app.get('/api/logs', async (c) => {
 
 // GET /api/summary?date=YYYY-MM-DD — 日報プレビュー
 app.get('/api/summary', async (c) => {
+  const user = c.get('user');
   const date = c.req.query('date') ?? new Date().toISOString().slice(0, 10);
-  const markdown = await generateDailyReport(c.env.DB, date);
+  const userId = user?.id ?? null;
+  const markdown = await generateDailyReport(c.env.DB, date, userId);
   return c.text(markdown);
 });
 
@@ -404,20 +534,15 @@ function renderMarkdown(md: string): string {
   return md
     .split('\n')
     .map((line) => {
-      // Headers
       if (line.startsWith('##### ')) return `<h5>${escapeHtml(line.slice(6))}</h5>`;
       if (line.startsWith('#### ')) return `<h4>${escapeHtml(line.slice(5))}</h4>`;
       if (line.startsWith('### ')) return `<h3>${escapeHtml(line.slice(4))}</h3>`;
       if (line.startsWith('## ')) return `<h2>${escapeHtml(line.slice(3))}</h2>`;
       if (line.startsWith('# ')) return `<h1>${escapeHtml(line.slice(2))}</h1>`;
-      // Horizontal rule
       if (/^---+$/.test(line.trim())) return '<hr>';
-      // List items
       if (line.startsWith('- ')) return `<li>${inlineMarkdown(line.slice(2))}</li>`;
       if (/^\d+\. /.test(line)) return `<li>${inlineMarkdown(line.replace(/^\d+\. /, ''))}</li>`;
-      // Empty line → paragraph break
       if (line.trim() === '') return '';
-      // Normal paragraph
       return `<p>${inlineMarkdown(line)}</p>`;
     })
     .join('\n');
@@ -429,23 +554,24 @@ function escapeHtml(s: string): string {
 
 function inlineMarkdown(s: string): string {
   let out = escapeHtml(s);
-  // Images: ![alt](url)
   out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:0.5rem 0;">');
-  // Links: [text](url)
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color:#4B0082;">$1</a>');
-  // Bold
   out = out.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Italic
   out = out.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  // Inline code
   out = out.replace(/`(.+?)`/g, '<code style="background:#f4f0ff;padding:0.1em 0.4em;border-radius:3px;font-size:0.9em;">$1</code>');
   return out;
 }
 
 // POST /api/blog — create or update a blog entry (authenticated)
 app.post('/api/blog', async (c) => {
-  const { username, date, title, body, cover_url, is_draft } = await c.req.json<{
-    username: string;
+  const user = c.get('user');
+
+  // Blog publishing requires tier >= 1 (registered user)
+  if (!user || user.tier < 1) {
+    return c.json({ error: 'Blog publishing requires registration (Tier 1)' }, 403);
+  }
+
+  const { date, title, body, cover_url, is_draft } = await c.req.json<{
     date: string;
     title?: string;
     body: string;
@@ -453,37 +579,43 @@ app.post('/api/blog', async (c) => {
     is_draft?: boolean;
   }>();
 
+  // Use username from auth context, not request body
+  const username = user.username;
   if (!username || !date || !body) {
-    return c.json({ error: 'username, date, and body are required' }, 400);
+    return c.json({ error: 'date and body are required; username must be set via registration' }, 400);
   }
 
   await c.env.DB.prepare(
-    'INSERT OR REPLACE INTO blogs (username, date, title, body, cover_url, is_draft) VALUES (?, ?, ?, ?, ?, ?)'
-  ).bind(username, date, title ?? null, body, cover_url ?? null, is_draft ? 1 : 0).run();
+    'INSERT OR REPLACE INTO blogs (username, date, title, body, cover_url, is_draft, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(username, date, title ?? null, body, cover_url ?? null, is_draft ? 1 : 0, user.id).run();
 
   return c.json({ ok: true, username, date, is_draft: !!is_draft });
 });
 
-// --- File serving & cover upload (must be before catch-all /:username routes) ---
-
 // POST /api/blog/cover — upload cover art PNG (authenticated)
 app.post('/api/blog/cover', async (c) => {
-  const contentType = c.req.header('Content-Type') || '';
+  const user = c.get('user');
+  if (!user || user.tier < 1) {
+    return c.json({ error: 'Cover upload requires registration (Tier 1)' }, 403);
+  }
 
-  let username: string;
+  const username = user.username;
+  if (!username) {
+    return c.json({ error: 'Username must be set via registration' }, 400);
+  }
+
+  const contentType = c.req.header('Content-Type') || '';
   let date: string;
   let imageData: ArrayBuffer;
 
   if (contentType.includes('multipart/form-data')) {
     const form = await c.req.formData();
-    username = form.get('username') as string;
     date = form.get('date') as string;
     const file = form.get('image') as File;
     if (!file) return c.json({ error: 'image is required' }, 400);
     imageData = await file.arrayBuffer();
   } else {
-    const body = await c.req.json<{ username: string; date: string; image_base64: string }>();
-    username = body.username;
+    const body = await c.req.json<{ date: string; image_base64: string }>();
     date = body.date;
     if (!body.image_base64) return c.json({ error: 'image_base64 is required' }, 400);
     const binary = atob(body.image_base64);
@@ -492,8 +624,8 @@ app.post('/api/blog/cover', async (c) => {
     imageData = bytes.buffer;
   }
 
-  if (!username || !date) {
-    return c.json({ error: 'username and date are required' }, 400);
+  if (!date) {
+    return c.json({ error: 'date is required' }, 400);
   }
 
   const yymmdd = date.slice(2).replace(/-/g, '');
@@ -511,6 +643,183 @@ app.post('/api/blog/cover', async (c) => {
 
   return c.json({ ok: true, cover_url: coverUrl, size: imageData.byteLength });
 });
+
+// DELETE /api/blog — delete a blog entry
+app.delete('/api/blog', async (c) => {
+  const user = c.get('user');
+  if (!user || !user.username) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const { date } = await c.req.json<{ date: string }>();
+  if (!date) return c.json({ error: 'date is required' }, 400);
+
+  // Delete blog record
+  await c.env.DB.prepare(
+    'DELETE FROM blogs WHERE username = ? AND date = ? AND user_id = ?'
+  ).bind(user.username, date, user.id).run();
+
+  // Delete R2 cover
+  const yymmdd = date.slice(2).replace(/-/g, '');
+  const key = `${user.username}/${yymmdd}.png`;
+  await c.env.COVERS.delete(key);
+
+  return c.json({ ok: true });
+});
+
+// DELETE /api/account — delete all user data
+app.delete('/api/account', async (c) => {
+  const user = c.get('user');
+  if (!user || user.id === 0) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  // Delete all blogs
+  const blogs = await c.env.DB.prepare(
+    'SELECT username, date FROM blogs WHERE user_id = ?'
+  ).bind(user.id).all();
+
+  // Delete R2 covers
+  for (const blog of blogs.results ?? []) {
+    const yymmdd = (blog.date as string).slice(2).replace(/-/g, '');
+    const key = `${blog.username}/${yymmdd}.png`;
+    await c.env.COVERS.delete(key);
+  }
+
+  // Delete all data in batch
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM blogs WHERE user_id = ?').bind(user.id),
+    c.env.DB.prepare('DELETE FROM logs WHERE user_id = ?').bind(user.id),
+    c.env.DB.prepare('DELETE FROM email_verifications WHERE user_id = ?').bind(user.id),
+    c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id),
+  ]);
+
+  return c.json({ ok: true });
+});
+
+// POST /api/verify-email/send — send verification email via Resend
+app.post('/api/verify-email/send', async (c) => {
+  const user = c.get('user');
+  if (!user || user.id === 0) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const { email } = await c.req.json<{ email: string }>();
+  if (!email || !email.includes('@')) {
+    return c.json({ error: 'Valid email is required' }, 400);
+  }
+
+  // Generate 6-digit code
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+  // Store verification record
+  await c.env.DB.prepare(
+    'INSERT INTO email_verifications (user_id, email, code, expires_at) VALUES (?, ?, ?, ?)'
+  ).bind(user.id, email, code, expiresAt).run();
+
+  // Update user email
+  await c.env.DB.prepare(
+    'UPDATE users SET email = ? WHERE id = ?'
+  ).bind(email, user.id).run();
+
+  // Send email via Resend
+  if (c.env.RESEND_API_KEY) {
+    try {
+      await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${c.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: 'nehan.ai <noreply@nehan.ai>',
+          to: [email],
+          subject: 'nehan.ai - Email Verification Code',
+          html: `<p>Your verification code is: <strong>${code}</strong></p><p>This code expires in 10 minutes.</p><p>If you did not request this, please ignore this email.</p>`,
+        }),
+      });
+    } catch (e) {
+      console.error('Resend API error:', e);
+    }
+  } else {
+    // Dev mode: log code to console
+    console.log(`[dev] Verification code for ${email}: ${code}`);
+  }
+
+  return c.json({ ok: true });
+});
+
+// POST /api/verify-email/confirm — verify email code
+app.post('/api/verify-email/confirm', async (c) => {
+  const user = c.get('user');
+  if (!user || user.id === 0) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const { code } = await c.req.json<{ code: string }>();
+  if (!code) {
+    return c.json({ error: 'code is required' }, 400);
+  }
+
+  const record = await c.env.DB.prepare(
+    'SELECT id, email, expires_at FROM email_verifications WHERE user_id = ? AND code = ? AND used_at IS NULL ORDER BY created_at DESC LIMIT 1'
+  ).bind(user.id, code).first();
+
+  if (!record) {
+    return c.json({ error: 'Invalid or expired code' }, 400);
+  }
+
+  const expiresAt = new Date(record.expires_at as string);
+  if (expiresAt < new Date()) {
+    return c.json({ error: 'Code has expired' }, 400);
+  }
+
+  const now = new Date().toISOString();
+
+  // Mark code as used and verify email
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE email_verifications SET used_at = ? WHERE id = ?').bind(now, record.id),
+    c.env.DB.prepare('UPDATE users SET email_verified_at = ? WHERE id = ?').bind(now, user.id),
+  ]);
+
+  return c.json({ ok: true });
+});
+
+// POST /api/upgrade — upgrade from guest to registered (Tier 1)
+app.post('/api/upgrade', async (c) => {
+  const user = c.get('user');
+  if (!user || user.id === 0) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const { username, tos_version } = await c.req.json<{ username: string; tos_version: string }>();
+
+  // Check email verification
+  const userRow = await c.env.DB.prepare(
+    'SELECT email_verified_at FROM users WHERE id = ?'
+  ).bind(user.id).first();
+
+  if (!userRow?.email_verified_at) {
+    return c.json({ error: 'Email verification required before upgrading' }, 400);
+  }
+
+  // Validate username
+  const usernameResult = await validateUsername(c.env.DB, username);
+  if (!usernameResult.available) {
+    return c.json({ error: usernameResult.reason }, 400);
+  }
+
+  const now = new Date().toISOString();
+
+  await c.env.DB.prepare(
+    'UPDATE users SET username = ?, tier = 1, tos_accepted_at = ?, tos_version = ? WHERE id = ?'
+  ).bind(username, now, tos_version || '2026-04-11', user.id).run();
+
+  return c.json({ ok: true, username, tier: 1 });
+});
+
+// --- File serving & blog pages ---
 
 // GET /:username/YYMMDD.md — raw Markdown text
 app.get('/:username/:file{[0-9]{6}\\.md}', async (c) => {
@@ -678,7 +987,6 @@ function toJST(ts: string): string {
   }
 }
 
-// 同じ場所（500m以内）の連続ログを開始〜終了に集約
 function collapseLocations(locations: any[]): Array<{ place: string; coord: string; start: string; end: string }> {
   if (!locations.length) return [];
 
@@ -698,10 +1006,8 @@ function collapseLocations(locations: any[]): Array<{ place: string; coord: stri
     const dist = haversine(current.lat, current.lon, l.latitude, l.longitude);
 
     if (dist < 500) {
-      // 同じ場所 → 終了時刻を更新
       current.end = l.timestamp;
     } else {
-      // 新しい場所 → 前を確定して次へ
       collapsed.push({ place: current.place, coord: current.coord, start: current.start, end: current.end });
       current = {
         place: l.place_name || formatCoord(l),
@@ -732,10 +1038,19 @@ function haversine(lat1: number | null, lon1: number | null, lat2: number | null
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-async function generateDailyReport(db: D1Database, date: string): Promise<string> {
-  const { results } = await db.prepare(
-    "SELECT * FROM logs WHERE date(timestamp, '+9 hours') = ? ORDER BY timestamp ASC"
-  ).bind(date).all();
+async function generateDailyReport(db: D1Database, date: string, userId: number | null): Promise<string> {
+  let results;
+  if (userId && userId > 0) {
+    const res = await db.prepare(
+      "SELECT * FROM logs WHERE date(timestamp, '+9 hours') = ? AND (user_id = ? OR user_id IS NULL) ORDER BY timestamp ASC"
+    ).bind(date, userId).all();
+    results = res.results;
+  } else {
+    const res = await db.prepare(
+      "SELECT * FROM logs WHERE date(timestamp, '+9 hours') = ? ORDER BY timestamp ASC"
+    ).bind(date).all();
+    results = res.results;
+  }
 
   if (!results?.length) return '';
 
@@ -744,12 +1059,11 @@ async function generateDailyReport(db: D1Database, date: string): Promise<string
   const healthMemos = results.filter((r: any) => r.type === 'memo' && (r as any).payload?.startsWith('health:'));
   const memos = results.filter((r: any) => r.type === 'memo' && !(r as any).payload?.startsWith('health:'));
 
-  let md = `# 📍 nehan日報 ${date}\n\n`;
+  let md = `# nehan日報 ${date}\n\n`;
 
-  // 睡眠（最新1件のみ）
   if (sleeps.length > 0) {
     const s = sleeps[sleeps.length - 1];
-    md += `## 🛏️ 睡眠\n`;
+    md += `## 睡眠\n`;
     try {
       const p = JSON.parse((s as any).payload || '{}');
       const asleepTime = p.asleep ? toJST(p.asleep) : '?';
@@ -761,20 +1075,28 @@ async function generateDailyReport(db: D1Database, date: string): Promise<string
           md += `  - ${st.stage}: ${st.minutes}min\n`;
         }
       }
+      // Naps
+      if (p.naps && Array.isArray(p.naps) && p.naps.length > 0) {
+        md += `\n### 昼寝 (Naps)\n`;
+        for (const nap of p.naps) {
+          const napStart = nap.start ? toJST(nap.start) : '?';
+          const napEnd = nap.end ? toJST(nap.end) : '?';
+          md += `- ${napStart}〜${napEnd} ${nap.minutes}分 — ${nap.evaluation || ''}\n`;
+        }
+      }
     } catch {
       md += `- (データ解析エラー)\n`;
     }
     md += '\n';
   }
 
-  // ヘルスデータ（最新1件のみ）
   if (healthMemos.length > 0) {
     const h = healthMemos[healthMemos.length - 1];
     try {
       const json = (h as any).payload?.replace('health: ', '') ?? '{}';
       const p = JSON.parse(json);
       if (p.steps || p.heartRate) {
-        md += `## 🏃 アクティビティ\n`;
+        md += `## アクティビティ\n`;
         if (p.steps) md += `- 歩数: ${Number(p.steps).toLocaleString()} 歩\n`;
         if (p.heartRate) {
           md += `- 心拍: 平均 ${p.heartRate.avg} bpm (↓${p.heartRate.min} ↑${p.heartRate.max})\n`;
@@ -784,10 +1106,9 @@ async function generateDailyReport(db: D1Database, date: string): Promise<string
     } catch { /* skip */ }
   }
 
-  // 訪問場所（同じ場所を開始〜終了に集約）
   if (locations.length > 0) {
     const collapsed = collapseLocations(locations);
-    md += `## 📍 訪問場所\n`;
+    md += `## 訪問場所\n`;
     md += `| 時刻 | 場所 | 座標 |\n|------|------|------|\n`;
     for (const loc of collapsed) {
       const startTime = toJST(loc.start);
@@ -798,9 +1119,8 @@ async function generateDailyReport(db: D1Database, date: string): Promise<string
     md += '\n';
   }
 
-  // メモ
   if (memos.length > 0) {
-    md += `## 📝 メモ\n`;
+    md += `## メモ\n`;
     for (const m of memos) {
       const time = toJST((m as any).timestamp);
       md += `- ${time} ${(m as any).payload || ''}\n`;

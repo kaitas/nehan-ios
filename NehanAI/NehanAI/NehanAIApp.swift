@@ -22,13 +22,26 @@ struct NehanAIApp: App {
         scheduleBlogPublish()
     }
 
+    /// Show FTUE if: profile not completed OR auth not established (no API key in Keychain)
+    private var needsFTUE: Bool {
+        !profileStore.profile.onboardingCompleted || !AuthService.shared.isRegistered
+    }
+
     var body: some Scene {
         WindowGroup {
-            if profileStore.needsOnboarding {
+            if needsFTUE {
                 OnboardingView(profileStore: profileStore)
             } else {
                 ContentView()
-                    .task { await setupNotifications() }
+                    .task {
+                        // Re-register if needed (e.g. key was cleared)
+                        if !AuthService.shared.isRegistered {
+                            await AuthService.shared.register()
+                        }
+                        await AuthService.shared.fetchMe()
+                        await AuthService.shared.syncDemographics(profile: profileStore.profile)
+                        await setupNotifications()
+                    }
                     .onAppear { checkAppleIntelligence() }
                     .alert("Apple Intelligence", isPresented: $showIntelligenceAlert) {
                         Button("OK", role: .cancel) {}

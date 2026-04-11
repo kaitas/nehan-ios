@@ -70,6 +70,57 @@
     }
     .app-store-badge:hover { background: rgba(255,255,255,0.2); }
 
+    /* Waitlist */
+    .waitlist {
+      max-width: 480px;
+      margin: 2.5rem auto 0;
+      text-align: center;
+    }
+    .waitlist p {
+      font-size: 0.95rem;
+      opacity: 0.7;
+      margin-bottom: 0.75rem;
+    }
+    .waitlist-form {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    .waitlist-form input {
+      flex: 1;
+      max-width: 280px;
+      padding: 0.7rem 1rem;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      font-size: 0.95rem;
+      outline: none;
+    }
+    .waitlist-form input::placeholder { color: rgba(255,255,255,0.4); }
+    .waitlist-form input:focus { border-color: rgba(200,168,255,0.6); background: rgba(255,255,255,0.12); }
+    .waitlist-form button {
+      padding: 0.7rem 1.2rem;
+      border-radius: 10px;
+      border: none;
+      background: #6a2dc8;
+      color: #fff;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      white-space: nowrap;
+    }
+    .waitlist-form button:hover { background: #7b3dd9; }
+    .waitlist-form button:disabled { opacity: 0.5; cursor: default; }
+    .waitlist-msg {
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      min-height: 1.3em;
+    }
+    .waitlist-msg.success { color: #a0e0a0; }
+    .waitlist-msg.error { color: #e0a0a0; }
+
     /* Features */
     .features {
       max-width: 960px;
@@ -180,7 +231,51 @@
     <h1>nehan.ai</h1>
     <p class="tagline">あなたのiPhoneヘルスケアが、そのまま日記になる。<br>睡眠・歩数・位置情報を自動で記録し、毎日のライフログを生成します。</p>
     <a class="app-store-badge" href="#">App Store — Coming Soon</a>
+
+    <div class="waitlist">
+      <p>リリース時にお知らせを受け取る</p>
+      <form class="waitlist-form" id="waitlistForm">
+        <input type="email" id="waitlistEmail" placeholder="you@example.com" required autocomplete="email">
+        <button type="submit" id="waitlistBtn">登録</button>
+      </form>
+      <div class="waitlist-msg" id="waitlistMsg"></div>
+    </div>
   </section>
+
+  <script>
+    document.getElementById('waitlistForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var btn = document.getElementById('waitlistBtn');
+      var msg = document.getElementById('waitlistMsg');
+      var email = document.getElementById('waitlistEmail').value;
+      btn.disabled = true;
+      msg.textContent = '';
+      msg.className = 'waitlist-msg';
+      try {
+        var res = await fetch('/api/waitlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email })
+        });
+        var data = await res.json();
+        if (data.ok) {
+          msg.textContent = data.message === 'already_registered'
+            ? 'このメー��アドレスは登録済みです'
+            : 'ご登録ありがとうございます！リリース時にお知らせします。';
+          msg.className = 'waitlist-msg success';
+          document.getElementById('waitlistEmail').value = '';
+          if (typeof gtag === 'function') gtag('event', 'waitlist_signup', { method: 'email' });
+        } else {
+          msg.textContent = data.error || 'エラーが発生しました';
+          msg.className = 'waitlist-msg error';
+        }
+      } catch (err) {
+        msg.textContent = 'ネットワークエラーが発生しました';
+        msg.className = 'waitlist-msg error';
+      }
+      btn.disabled = false;
+    });
+  </script>
 
   <!-- Features -->
   <section class="features">
@@ -261,7 +356,7 @@
 
       <div class="faq-item">
         <dt>Q: 停止・退会はどうやるの？</dt>
-        <dd>アプリを削除することでヘルスケアデータを利用することは無くなります。一度投稿されたブログを削除する機能はありませんので、アプリの中から削除や修正をする必要があります。nehan.aiサイト内に投稿されたブログを削除したい等のリクエストはお受けしていませんのでご注意ください。</dd>
+        <dd>アプリ内の「設定」画面から「アカウントを削除」を選択すると、ブログ・ログ・カバー画像などすべてのデータが削除されます。また、<a href="mailto:nehan@aicu.ai" style="color:#c8a8ff;">nehan@aicu.ai</a> にご連絡いただくことでも削除を要求できます。要求から30日以内にデータを完全削除いたします。</dd>
       </div>
     </dl>
   </section>
