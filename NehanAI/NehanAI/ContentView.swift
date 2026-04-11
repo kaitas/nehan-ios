@@ -22,6 +22,12 @@ struct ContentView: View {
     @State private var showStreakHelp = false
     @State private var menstrualSummary: HealthKitService.MenstrualSummary?
     @State private var appState = AppState.shared
+    @State private var showBufferHelp = false
+    @State private var showGPSHelp = false
+    @State private var showCoordHelp = false
+    @State private var showDreamDialog = false
+    @State private var dreamInput = ""
+    @State private var lastAutoRefresh: Date?
 
     /// Whether Image Playground (Apple Intelligence imagery) is supported on this device.
     private static var isImagePlaygroundSupported: Bool {
@@ -49,8 +55,19 @@ struct ContentView: View {
             .refreshable { await pullToRefresh() }
             .navigationTitle("nehan.ai")
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    headerTrailing
+                ToolbarItem(placement: .principal) {
+                    let username = profileStore.profile.displayName.isEmpty
+                        ? "o_ob"
+                        : profileStore.profile.displayName
+                    Button {
+                        if let url = URL(string: "https://nehan.ai/\(username)") {
+                            UIApplication.shared.open(url)
+                        }
+                    } label: {
+                        Text("nehan.ai/\(username)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .sheet(isPresented: $showingNameDialog) {
@@ -96,6 +113,21 @@ struct ContentView: View {
                 showBlogEditor = true
                 appState.shouldOpenBlogEditor = false
             }
+        }
+        .alert("おはようございます!", isPresented: $showDreamDialog) {
+            TextField("どんな夢を見た？", text: $dreamInput)
+            Button("保存") {
+                if !dreamInput.isEmpty {
+                    blogEntry.dreamDiary = dreamInput
+                    BlogPublishService.saveLocal(blogEntry)
+                }
+                dreamInput = ""
+            }
+            Button("夢は見なかった", role: .cancel) {
+                dreamInput = ""
+            }
+        } message: {
+            Text("どんな夢を見た？")
         }
     }
 
@@ -167,16 +199,6 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder
-    private var headerTrailing: some View {
-        let username = profileStore.profile.displayName.isEmpty
-            ? "user"
-            : profileStore.profile.displayName
-        Link("/\(username)", destination: URL(string: "https://nehan.ai/\(username)")!)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-    }
-
     /// Generate context-aware message based on time, location, health data
     private var contextMessage: String {
         let hour = Calendar.current.component(.hour, from: Date())
@@ -234,12 +256,27 @@ struct ContentView: View {
                     .font(.subheadline)
 
                 if SyncService.shared.pendingCount > 0 {
-                    Text("\(SyncService.shared.pendingCount)件")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.secondary.opacity(0.12), in: Capsule())
+                    Button { showBufferHelp = true } label: {
+                        Text("\(SyncService.shared.pendingCount)件")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.secondary.opacity(0.12), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showBufferHelp) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("同期バッファ", systemImage: "tray.full")
+                                .font(.subheadline.bold())
+                            Text("位置情報・睡眠・メモなどの記録がバッファに\(SyncService.shared.pendingCount)件たまっています。50件に達するか「今すぐ同期」を押すとサーバーに送信されます。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding()
+                        .frame(width: 280)
+                        .presentationCompactAdaptation(.popover)
+                    }
                 }
 
                 Spacer()
@@ -261,15 +298,50 @@ struct ContentView: View {
                 let matched = bookmarkStore.match(latitude: coord.latitude, longitude: coord.longitude)
 
                 HStack(spacing: 8) {
-                    gpsAccuracyView(accuracy: loc.horizontalAccuracy)
+                    Button { showGPSHelp = true } label: {
+                        gpsAccuracyView(accuracy: loc.horizontalAccuracy)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showGPSHelp) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("GPS精度", systemImage: "location.fill")
+                                .font(.subheadline.bold())
+                            Text("現在のGPS精度を色で表示しています。")
+                                .font(.caption)
+                            VStack(alignment: .leading, spacing: 4) {
+                                gpsHelpRow(color: .green, text: "±10m以内 — 高精度")
+                                gpsHelpRow(color: .yellow, text: "±50m以内 — 中精度")
+                                gpsHelpRow(color: .orange, text: "±100m以内 — 低精度")
+                                gpsHelpRow(color: .red, text: "±100m以上 — 非常に低精度")
+                            }
+                        }
+                        .padding()
+                        .frame(width: 260)
+                        .presentationCompactAdaptation(.popover)
+                    }
 
                     if let matched {
-                        HStack(spacing: 4) {
-                            Image(systemName: "mappin.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                            Text(matched.name)
-                                .font(.subheadline)
+                        Button { showCoordHelp = true } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "mappin.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                Text(matched.name)
+                                    .font(.subheadline)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: $showCoordHelp) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Label("座標メモ", systemImage: "mappin.and.ellipse")
+                                    .font(.subheadline.bold())
+                                Text("現在地から200m以内に登録された座標メモ「\(matched.name)」(\(matched.category.rawValue))にマッチしています。座標や住所の代わりにこの名前で記録されます。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding()
+                            .frame(width: 280)
+                            .presentationCompactAdaptation(.popover)
                         }
                     } else {
                         Text("\(coord.latitude, specifier: "%.4f"), \(coord.longitude, specifier: "%.4f")")
@@ -303,6 +375,13 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func gpsHelpRow(color: Color, text: String) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(text).font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -414,9 +493,17 @@ struct ContentView: View {
                 Text("ブログ")
                 Spacer()
                 if isTodayBlogPublished {
-                    Label("投稿済み", systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
+                    Button {
+                        let username = profileStore.profile.displayName.isEmpty ? "o_ob" : profileStore.profile.displayName
+                        let dateStr = BlogEntry.todayDateString.replacingOccurrences(of: "-", with: "").dropFirst(2)
+                        if let url = URL(string: "https://nehan.ai/\(username)/\(dateStr)") {
+                            UIApplication.shared.open(url)
+                        }
+                    } label: {
+                        Label("投稿済み", systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
                 } else {
                     Text("\(profileStore.profile.blogPublishHour)時に自動投稿")
                         .font(.caption)
@@ -548,7 +635,15 @@ struct ContentView: View {
             jstFormatter.timeZone = TimeZone(identifier: "Asia/Tokyo")
             let dateStr = jstFormatter.string(from: Date())
 
+            // Preserve existing cover image
+            let existingCoverImage = blogEntry.coverImage
+            let existingCoverURL = blogEntry.coverURL
+
             var entry = BlogEntry()
+
+            // Restore cover image
+            entry.coverImage = existingCoverImage
+            entry.coverURL = existingCoverURL
 
             // Field 0: Date + Weather + Health summary
             var field0 = dateStr
@@ -563,7 +658,7 @@ struct ContentView: View {
             }
             entry.dateWeatherHealth = field0
 
-            // Field 1: Sleep info
+            // Field 1: Sleep info with quality evaluation
             if let sleep = sleepSummary {
                 let h = sleep.totalMinutes / 60
                 let m = sleep.totalMinutes % 60
@@ -572,6 +667,20 @@ struct ContentView: View {
                     sleepText += "（\(asleep.formatted(date: .omitted, time: .shortened))→\(awake.formatted(date: .omitted, time: .shortened))）"
                 }
                 sleepText += " deep:\(sleep.deepMinutes)m rem:\(sleep.remMinutes)m"
+
+                // Sleep quality evaluation
+                let totalHours = Double(sleep.totalMinutes) / 60.0
+                let quantityEval: String
+                if totalHours >= 7.5 { quantityEval = "十分" }
+                else if totalHours >= 6.0 { quantityEval = "やや不足" }
+                else { quantityEval = "不足" }
+
+                let qualityEval: String
+                if sleep.deepMinutes >= 60 && sleep.remMinutes >= 45 { qualityEval = "良好" }
+                else if sleep.deepMinutes >= 30 { qualityEval = "普通" }
+                else { qualityEval = "浅め" }
+
+                sleepText += "\n量: \(quantityEval) / 質: \(qualityEval)"
                 entry.sleepInfo = sleepText
             }
 
@@ -579,11 +688,16 @@ struct ContentView: View {
             entry.dreamDiary = blogEntry.dreamDiary
 
             // Field 3: Places visited
+            let lang = profileStore.profile.language
             if let loc = locationService.lastLocation {
                 let matched = bookmarkStore.match(latitude: loc.coordinate.latitude, longitude: loc.coordinate.longitude)
                 if let name = matched?.name {
                     entry.placesVisited = name
+                } else {
+                    entry.placesVisited = lang == .en ? "Haven't gone anywhere yet today" : "今日はまだどこにも行っていない"
                 }
+            } else {
+                entry.placesVisited = lang == .en ? "Haven't gone anywhere yet today" : "今日はまだどこにも行っていない"
             }
 
             // Field 4: Today feeling (keep existing)
@@ -660,8 +774,40 @@ struct ContentView: View {
         }
         Task {
             try? await HealthKitService.shared.requestPermission()
-            await refreshHealthData()
-            lastHealthTime = Date()
+
+            // Auto-refresh if 5+ minutes since last refresh
+            let shouldAutoRefresh: Bool
+            if let last = lastAutoRefresh {
+                shouldAutoRefresh = Date().timeIntervalSince(last) > 300
+            } else {
+                shouldAutoRefresh = true
+            }
+
+            if shouldAutoRefresh {
+                let hadSleepBefore = sleepSummary != nil
+                await refreshHealthData()
+                lastHealthTime = Date()
+
+                // Fetch & sync health data to Cloudflare
+                let hk = HealthKitService.shared
+                if let sleepEntry = try? await hk.fetchSleepData(for: Date()) {
+                    SyncService.shared.addEntry(sleepEntry)
+                }
+                if let healthEntry = try? await hk.fetchDailyHealthData(for: Date()) {
+                    SyncService.shared.addEntry(healthEntry)
+                }
+                await SyncService.shared.sync()
+                lastSyncTime = Date()
+                lastAutoRefresh = Date()
+
+                // Show dream diary dialog if new sleep data detected
+                if !hadSleepBefore && sleepSummary != nil && blogEntry.dreamDiary.isEmpty {
+                    showDreamDialog = true
+                }
+            } else {
+                await refreshHealthData()
+                lastHealthTime = Date()
+            }
         }
         locationService.requestPermission()
         locationService.startTracking()
