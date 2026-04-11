@@ -79,15 +79,20 @@ struct ContentView: View {
             .navigationTitle("nehan.ai")
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    let username = profileStore.profile.displayName.isEmpty
-                        ? "o_ob"
-                        : profileStore.profile.displayName
-                    Button {
-                        if let url = URL(string: "https://nehan.ai/\(username)") {
-                            UIApplication.shared.open(url)
+                    let username = AuthService.shared.currentUser?.username
+                        ?? (profileStore.profile.displayName.isEmpty ? nil : profileStore.profile.displayName)
+                    if let username {
+                        Button {
+                            if let url = URL(string: "https://nehan.ai/\(username)") {
+                                UIApplication.shared.open(url)
+                            }
+                        } label: {
+                            Text("nehan.ai/\(username)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
-                    } label: {
-                        Text("nehan.ai/\(username)")
+                    } else {
+                        Text("nehan.ai")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -367,6 +372,8 @@ struct ContentView: View {
                     .replacingOccurrences(of: "\r", with: "")
                     .replacingOccurrences(of: "\"", with: "")
                     .replacingOccurrences(of: "**", with: "")
+                    // Strip parenthetical translations e.g. "(Congratulations!)"
+                    .replacingOccurrences(of: "\\s*[（(][^)）]*[)）]", with: "", options: .regularExpression)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if !cleaned.isEmpty {
                     aiFlavorText = String(cleaned.prefix(40))
@@ -406,7 +413,7 @@ struct ContentView: View {
         }
 
         return """
-        You are a friendly wellness companion. \(persona) Based on the user's health data, generate ONE short encouraging message (max 40 characters) in \(langName). Output ONLY the plain message text. No language codes, no quotes, no markdown, no explanation.
+        You are a friendly wellness companion. \(persona) Based on the user's health data, generate ONE short encouraging message (max 40 characters) in \(langName) ONLY. Do NOT include translations, parenthetical text, or any other language. Output ONLY the plain message text. No language codes, no quotes, no markdown, no parentheses, no explanation.
 
         Context: \(context)
         """
@@ -1102,8 +1109,8 @@ struct ContentView: View {
 
     /// Check if today's blog is published on the server
     private func checkBlogStatus() async {
-        let username = AuthService.shared.currentUser?.username
-            ?? (profileStore.profile.displayName.isEmpty ? "o_ob" : profileStore.profile.displayName)
+        guard let username = AuthService.shared.currentUser?.username
+            ?? (profileStore.profile.displayName.isEmpty ? nil : profileStore.profile.displayName) else { return }
         let dateStr = BlogEntry.todayDateString
         let yymmdd = String(dateStr.dropFirst(2)).replacingOccurrences(of: "-", with: "")
 
