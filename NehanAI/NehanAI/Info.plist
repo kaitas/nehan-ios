@@ -11,7 +11,9 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>nehan.aiが現在地を記録します</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>nehan.aiが睡眠データを日報に記録します</string>
+	<string>nehan.aiが睡眠・歩数・心拍・マインドフルネスなどのデータを日報に記録します</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>nehan.aiが気分・カフェイン・飲水・歯磨き・手洗い・頭痛などの記録をヘルスケアに保存します</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>ブログの書き忘れをお知らせします</string>
 	<key>UIBackgroundModes</key>
