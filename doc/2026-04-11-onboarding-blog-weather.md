@@ -83,13 +83,58 @@ App Store審査に向けたLP（ランディングページ）の大幅刷新、
 | `AGENTS.md` | Worker URL更新 |
 | `CLAUDE.md` | Worker URL更新 |
 
+## セッション2: マルチエージェント最適化・Issue一括解決 (夜)
+
+### AGENTS.md / CLAUDE.md マルチエージェント最適化
+- **CLAUDE.md**: エージェント共通エントリポイントに簡素化（アーキテクチャ概要、担当領域テーブル、コーディング規約）
+- **AGENTS.md**: ドメインセクション(§)構造に再編（§Worker, §iOS, §DevOps, §セキュリティ, §LP, §日報, §外部連携）
+- **§運用ルール** 追加: 「依頼：」Issueプロトコル（マスター @kaitas が手動対応必要なタスクの依頼方法）
+
+### Issue一括解決（マルチエージェント並列実行）
+3エージェントを並列起動して同時実装:
+- **#17 GA4トラッキング**: `public/index.html` と `pageLayout()` にGA4タグ挿入 → 測定ID `G-NHJNT7G479` 反映・デプロイ完了
+- **#10 オンボーディング修正**: 生年月日を1カードに統合、座標メモ説明削除
+- **#11 Apple Intelligenceフォールバック**: `FoundationModelService.isAvailable` チェック、非対応アラート、テンプレートフォールバック
+
+### 既存Issue整理
+クローズ: #10, #11, #12, #14, #16, #17 (6件)
+
+### 「依頼：」Issue作成
+- **#19** GA4測定ID取得 → ✅ 即日解決（`G-NHJNT7G479`）
+- **#20** Apple Developer Program登録（手順付き）
+- **#21** Worker API_TOKEN本番値設定（手順付き）
+
+### 新規Issue
+- **#18** 初期ユーザ向けナビゲーション＆チュートリアル
+- **#22** GA4分析ダッシュボード (/admin/) + Claude Codeスキル
+
+### GA4 設定完了
+| 項目 | 値 |
+|------|-----|
+| 測定ID | `G-NHJNT7G479` |
+| ストリームID | `14348007420` |
+| ストリーム名 | nehan.ai Web |
+| 対象 | LP + 全公開ページ（pageLayout共通） |
+
+## コミット履歴
+| ハッシュ | 内容 |
+|---------|------|
+| `e0a0521` | LP刷新、多言語Terms、ブログURL変更、座標メモカテゴリ、R2アップロード |
+| `3c48ad6` | AGENTS.md / CLAUDE.md マルチエージェント最適化 |
+| `03753a8` | GA4トラッキング、オンボーディングUI改善、Apple Intelligenceフォールバック |
+| `e436598` | GA4測定ID反映、「依頼：」運用ルール追加 |
+| `f985653` | AGENTS.md にGA4設定情報追記 |
+
 ## 未解決Issue
-- [ ] セキュリティ: per-user認証の実装
-- [ ] GA4設定とトラッキング
-- [ ] API_TOKEN の再設定（現在 "test"）
+- [ ] #18 初期ユーザ向けナビゲーション＆チュートリアル
+- [ ] #20 依頼：Apple Developer Program登録
+- [ ] #21 依頼：API_TOKEN本番値設定
+- [ ] #22 GA4分析ダッシュボード + スキル
+- [ ] #13 マネタイズ - Stripe
+- [ ] #1 WeatherKit（Apple Developer Program待ち）
+- [ ] セキュリティ: per-user認証 (Phase 1-3)
 - [ ] Resend メール認証連携
-- [ ] 静的サイト生成（MkDocs Material + Cloudflare Pages）の評価
-- [ ] Apple Developer Program 登録再試行
+- [ ] 静的サイト生成（MkDocs Material + Cloudflare Pages）
 - [ ] 多言語ローカライズファイル（en, zh-Hans, zh-Hant）
 
 ## 技術メモ
@@ -98,3 +143,4 @@ App Store審査に向けたLP（ランディングページ）の大幅刷新、
 - `wrangler delete` は非対話モードでCWD名のworkerを削除するため要注意
 - Cloudflare DNS API: `POST /zones/:zone_id/dns_records` でCNAMEレコード追加可能
 - Image Playground は1:1出力 → `CGImage.cropping(to:)` でセンタークロップ
+- マルチエージェント並列実行: 独立したファイルを扱うタスクは `run_in_background` で同時実行可能
