@@ -6,8 +6,8 @@
 iOSライフログアプリ + Cloudflare Workerバックエンド。
 HealthKit・位置情報・メモを自動記録し、オンデバイスAIでブログ日報を生成。
 
-- **所有者**: はかせ（白井博士 / AICU Inc.）
-- **リポジトリ**: kaitas/nehan-ios
+- **所有者**: はかせ（白井暁彦 / AICU Inc.）X@o_ob
+- **リポジトリ**: kaitas/nehan-ios (GitHub) リポジトリはもしかしたら github.com/AICUai/nehan-ios に移行するかも
 - **ドメイン**: `nehan.ai`（LP・ブログ）/ `ios.nehan.ai`（API）
 - **Bundle ID**: AI.AICU.NehanAI
 

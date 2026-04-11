@@ -1,7 +1,7 @@
-# 2026-04-11: LP刷新・利用規約多言語化・ブログURL変更・座標メモカテゴリ・セキュリティ監査
+# 2026-04-11: LP刷新・マルチエージェント最適化・HealthKit書き込み・UX改善
 
 ## 概要
-App Store審査に向けたLP（ランディングページ）の大幅刷新、プライバシーポリシー・利用規約の多言語対応、ブログURLのルートレベル化、予約ユーザー名テーブル、カバーアートR2アップロード、座標メモカテゴリ追加、カスタムドメイン設定、セキュリティ監査を実施。
+App Store審査に向けたLP刷新、プライバシーポリシー・利用規約の多言語対応、マルチエージェント最適化、UX改善10項目、HealthKitマインドフルネス/気分読み込み、MoodPickerSheetによるHealthKit書き込み、クイック記録バー（カフェイン・飲水・歯磨き・頭痛・手洗い）を実施。
 
 ## 実施内容
 
@@ -125,7 +125,43 @@ App Store審査に向けたLP（ランディングページ）の大幅刷新、
 | `e436598` | GA4測定ID反映、「依頼：」運用ルール追加 |
 | `f985653` | AGENTS.md にGA4設定情報追記 |
 
+## セッション3: HealthKit書き込み・クイック記録バー (夕方)
+
+### #24 MoodPickerSheet — ワンタップ気分記録 + HealthKit書き込み
+- MoodPickerSheetを改修: 12emoji → HealthKit `HKStateOfMind` に書き込み (iOS 18+)
+- 各気分にvalence値(-1.0〜1.0)と`HKStateOfMindLabel`をマッピング
+- タップ → HealthKit保存 → ✓フィードバック → 自動dismiss
+- `requestPermission()` に `toShare` 追加（State of Mind書き込み権限）
+
+### #25 HealthKit記録系 — クイック記録バー
+- `QuickRecordBar` コンポーネント新設（ContentView内）
+- 横スクロールで5つのクイック記録ボタン:
+  | アイテム | emoji | HKType | UI |
+  |---------|-------|--------|-----|
+  | カフェイン | ☕ | `dietaryCaffeine` | 量選択dialog (30/80/120/150mg) |
+  | 飲水 | 💧 | `dietaryWater` | 量選択dialog (200/250/500ml) |
+  | 歯磨き | 🪥 | `toothbrushingEvent` | ワンタップ(3分) |
+  | 手洗い | 🧼 | `handwashingEvent` | ワンタップ(20秒) |
+  | 頭痛 | 🤕 | `headache` | 重度選択dialog (軽度/中度/重度) |
+- 今日の記録数をラベルに表示（例: ×240mg, ×500ml, ×2）
+- 保存後に✓フィードバックトースト表示
+
+### HealthKitService 拡張
+- `requestPermission()`: readTypes/writeTypes分離、9種の権限追加
+- 書き込みメソッド追加:
+  - `saveStateOfMind(valence:labels:)` (iOS 18+)
+  - `saveCaffeine(mg:)`
+  - `saveWater(ml:)`
+  - `saveToothbrushing(durationMinutes:)`
+  - `saveHeadache(severity:)`
+  - `saveHandwashing(durationSeconds:)`
+- 読み取りメソッド追加:
+  - `fetchTodayQuickRecordCounts()` — 今日の各項目の合計/回数取得
+  - `fetchQuantitySum()` / `fetchCategoryCount()` — 汎用ヘルパー
+
 ## 未解決Issue
+- [ ] #24 MoodPickerSheet HealthKit書き込み ✅ 実装済み
+- [ ] #25 HealthKit記録系 ✅ 実装済み
 - [ ] #18 初期ユーザ向けナビゲーション＆チュートリアル
 - [ ] #20 依頼：Apple Developer Program登録
 - [ ] #21 依頼：API_TOKEN本番値設定

@@ -13,21 +13,37 @@ class HealthKitService {
     func requestPermission() async throws {
         guard isAvailable else { return }
 
-        var types: Set<HKObjectType> = [
+        var readTypes: Set<HKObjectType> = [
             HKCategoryType(.sleepAnalysis),
             HKQuantityType(.stepCount),
             HKQuantityType(.heartRate),
             HKCategoryType(.mindfulSession),
+            HKQuantityType(.dietaryCaffeine),
+            HKQuantityType(.dietaryWater),
+            HKCategoryType(.toothbrushingEvent),
+            HKCategoryType(.headache),
+            HKCategoryType(.handwashingEvent),
         ]
+
+        var writeTypes: Set<HKSampleType> = [
+            HKQuantityType(.dietaryCaffeine),
+            HKQuantityType(.dietaryWater),
+            HKCategoryType(.toothbrushingEvent),
+            HKCategoryType(.headache),
+            HKCategoryType(.handwashingEvent),
+            HKCategoryType(.mindfulSession),
+        ]
+
         // State of Mind (iOS 18+)
         if #available(iOS 18.0, *) {
-            types.insert(HKSampleType.stateOfMindType())
+            readTypes.insert(HKSampleType.stateOfMindType())
+            writeTypes.insert(HKSampleType.stateOfMindType())
         }
         // Menstrual flow (optional, only if user is female)
         if UserProfileStore.shared.isFemale {
-            types.insert(HKCategoryType(.menstrualFlow))
+            readTypes.insert(HKCategoryType(.menstrualFlow))
         }
-        try await store.requestAuthorization(toShare: [], read: types)
+        try await store.requestAuthorization(toShare: writeTypes, read: readTypes)
     }
 
     // MARK: - Sleep
@@ -401,6 +417,144 @@ class HealthKitService {
         }
 
         return StateOfMindSummary(valence: valence, valenceLabel: emoji, labels: labelNames)
+    }
+
+    // MARK: - Write: State of Mind
+
+    @available(iOS 18.0, *)
+    func saveStateOfMind(valence: Double, labels: [HKStateOfMind.Label]) async throws {
+        guard isAvailable else { return }
+
+        let sample = HKStateOfMind(
+            date: Date(),
+            kind: .momentaryEmotion,
+            valence: valence,
+            labels: labels,
+            associations: []
+        )
+        try await store.save(sample)
+    }
+
+    // MARK: - Write: Caffeine
+
+    func saveCaffeine(mg: Double) async throws {
+        guard isAvailable else { return }
+
+        let type = HKQuantityType(.dietaryCaffeine)
+        let quantity = HKQuantity(unit: .gramUnit(with: .milli), doubleValue: mg)
+        let sample = HKQuantitySample(type: type, quantity: quantity, start: Date(), end: Date())
+        try await store.save(sample)
+    }
+
+    // MARK: - Write: Water
+
+    func saveWater(ml: Double) async throws {
+        guard isAvailable else { return }
+
+        let type = HKQuantityType(.dietaryWater)
+        let quantity = HKQuantity(unit: .literUnit(with: .milli), doubleValue: ml)
+        let sample = HKQuantitySample(type: type, quantity: quantity, start: Date(), end: Date())
+        try await store.save(sample)
+    }
+
+    // MARK: - Write: Toothbrushing
+
+    func saveToothbrushing(durationMinutes: Int = 3) async throws {
+        guard isAvailable else { return }
+
+        let type = HKCategoryType(.toothbrushingEvent)
+        let end = Date()
+        let start = end.addingTimeInterval(-Double(durationMinutes * 60))
+        let sample = HKCategorySample(type: type, value: HKCategoryValue.notApplicable.rawValue, start: start, end: end)
+        try await store.save(sample)
+    }
+
+    // MARK: - Write: Headache
+
+    func saveHeadache(severity: Int) async throws {
+        guard isAvailable else { return }
+
+        // severity: 0=not present, 1=mild, 2=moderate, 3=severe
+        let type = HKCategoryType(.headache)
+        let sample = HKCategorySample(type: type, value: severity, start: Date(), end: Date())
+        try await store.save(sample)
+    }
+
+    // MARK: - Write: Handwashing
+
+    func saveHandwashing(durationSeconds: Int = 20) async throws {
+        guard isAvailable else { return }
+
+        let type = HKCategoryType(.handwashingEvent)
+        let end = Date()
+        let start = end.addingTimeInterval(-Double(durationSeconds))
+        let sample = HKCategorySample(type: type, value: HKCategoryValue.notApplicable.rawValue, start: start, end: end)
+        try await store.save(sample)
+    }
+
+    // MARK: - Read: Today's quick record counts
+
+    func fetchTodayQuickRecordCounts() async throws -> QuickRecordCounts {
+        guard isAvailable else { return QuickRecordCounts() }
+
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: Date())
+        let end = calendar.date(byAdding: .day, value: 1, to: start)!
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+
+        async let caffeine = fetchQuantitySum(type: .dietaryCaffeine, unit: .gramUnit(with: .milli), predicate: predicate)
+        async let water = fetchQuantitySum(type: .dietaryWater, unit: .literUnit(with: .milli), predicate: predicate)
+        async let toothbrush = fetchCategoryCount(type: .toothbrushingEvent, predicate: predicate)
+        async let headache = fetchCategoryCount(type: .headache, predicate: predicate)
+        async let handwash = fetchCategoryCount(type: .handwashingEvent, predicate: predicate)
+
+        return QuickRecordCounts(
+            caffeineMg: (try? await caffeine) ?? 0,
+            waterMl: (try? await water) ?? 0,
+            toothbrushCount: (try? await toothbrush) ?? 0,
+            headacheCount: (try? await headache) ?? 0,
+            handwashCount: (try? await handwash) ?? 0
+        )
+    }
+
+    struct QuickRecordCounts {
+        var caffeineMg: Double = 0
+        var waterMl: Double = 0
+        var toothbrushCount: Int = 0
+        var headacheCount: Int = 0
+        var handwashCount: Int = 0
+    }
+
+    private func fetchQuantitySum(type: HKQuantityTypeIdentifier, unit: HKUnit, predicate: NSPredicate) async throws -> Double {
+        let quantityType = HKQuantityType(type)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Double, Error>) in
+            let query = HKStatisticsQuery(
+                quantityType: quantityType,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum
+            ) { _, result, error in
+                if let error { continuation.resume(throwing: error); return }
+                let sum = result?.sumQuantity()?.doubleValue(for: unit) ?? 0
+                continuation.resume(returning: sum)
+            }
+            store.execute(query)
+        }
+    }
+
+    private func fetchCategoryCount(type: HKCategoryTypeIdentifier, predicate: NSPredicate) async throws -> Int {
+        let categoryType = HKCategoryType(type)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Int, Error>) in
+            let query = HKSampleQuery(
+                sampleType: categoryType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, results, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: results?.count ?? 0)
+            }
+            store.execute(query)
+        }
     }
 
     // MARK: - Combined health log entry

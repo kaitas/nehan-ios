@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import HealthKit
 
 struct ContentView: View {
     @StateObject private var locationService = LocationService.shared
@@ -53,6 +54,7 @@ struct ContentView: View {
                 headerSection
                 statusSection
                 timelineSection
+                quickRecordSection
                 blogSection
                 syncSection
             }
@@ -472,6 +474,16 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    // MARK: - Quick Record Section
+
+    private var quickRecordSection: some View {
+        Section {
+            QuickRecordBar()
+        } header: {
+            Text("クイック記録")
         }
     }
 
@@ -1183,12 +1195,28 @@ struct MoodPickerSheet: View {
     @Binding var selectedMood: String
     var onSelect: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var saved = false
 
-    private let moods: [(String, String)] = [
-        ("😊", "幸せ"), ("🙂", "穏やか"), ("😐", "普通"),
-        ("😔", "悲しい"), ("😤", "イライラ"), ("😰", "不安"),
-        ("🤩", "興奮"), ("😴", "眠い"), ("💪", "元気"),
-        ("🥱", "疲れた"), ("🤔", "考え中"), ("😌", "リラックス"),
+    struct MoodItem {
+        let emoji: String
+        let label: String
+        let valence: Double
+        let hkLabel: String // HKStateOfMind.Label case name
+    }
+
+    private let moods: [MoodItem] = [
+        MoodItem(emoji: "😊", label: "幸せ", valence: 0.8, hkLabel: "happy"),
+        MoodItem(emoji: "🙂", label: "穏やか", valence: 0.5, hkLabel: "calm"),
+        MoodItem(emoji: "😐", label: "普通", valence: 0.0, hkLabel: "indifferent"),
+        MoodItem(emoji: "😔", label: "悲しい", valence: -0.6, hkLabel: "sad"),
+        MoodItem(emoji: "😤", label: "イライラ", valence: -0.5, hkLabel: "irritated"),
+        MoodItem(emoji: "😰", label: "不安", valence: -0.7, hkLabel: "anxious"),
+        MoodItem(emoji: "🤩", label: "興奮", valence: 0.7, hkLabel: "excited"),
+        MoodItem(emoji: "😴", label: "眠い", valence: -0.1, hkLabel: "drained"),
+        MoodItem(emoji: "💪", label: "元気", valence: 0.6, hkLabel: "confident"),
+        MoodItem(emoji: "🥱", label: "疲れた", valence: -0.3, hkLabel: "drained"),
+        MoodItem(emoji: "🤔", label: "考え中", valence: 0.1, hkLabel: "indifferent"),
+        MoodItem(emoji: "😌", label: "リラックス", valence: 0.4, hkLabel: "peaceful"),
     ]
 
     var body: some View {
@@ -1198,16 +1226,22 @@ struct MoodPickerSheet: View {
                     .font(.title3.bold())
                     .padding(.top)
 
+                if saved {
+                    Label("HealthKitに保存しました", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.green)
+                        .transition(.scale.combined(with: .opacity))
+                }
+
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 16) {
-                    ForEach(moods, id: \.0) { emoji, label in
+                    ForEach(moods, id: \.emoji) { mood in
                         Button {
-                            selectedMood = "\(emoji) \(label)"
-                            onSelect("\(emoji) \(label)")
+                            selectMood(mood)
                         } label: {
                             VStack(spacing: 4) {
-                                Text(emoji)
+                                Text(mood.emoji)
                                     .font(.title)
-                                Text(label)
+                                Text(mood.label)
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -1219,6 +1253,10 @@ struct MoodPickerSheet: View {
                     }
                 }
                 .padding(.horizontal)
+
+                Text("HealthKitの「心の状態」にも記録されます")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
 
                 Spacer()
             }
@@ -1232,6 +1270,217 @@ struct MoodPickerSheet: View {
                 }
             }
         }
+    }
+
+    private func selectMood(_ mood: MoodItem) {
+        let moodText = "\(mood.emoji) \(mood.label)"
+        selectedMood = moodText
+        onSelect(moodText)
+
+        // Save to HealthKit
+        if #available(iOS 18.0, *) {
+            Task {
+                let hkLabel = mapToHKLabel(mood.hkLabel)
+                try? await HealthKitService.shared.saveStateOfMind(
+                    valence: mood.valence,
+                    labels: [hkLabel]
+                )
+                withAnimation { saved = true }
+                try? await Task.sleep(for: .seconds(1))
+                dismiss()
+            }
+        } else {
+            dismiss()
+        }
+    }
+
+    @available(iOS 18.0, *)
+    private func mapToHKLabel(_ name: String) -> HKStateOfMind.Label {
+        switch name {
+        case "happy": return .happy
+        case "calm": return .calm
+        case "indifferent": return .indifferent
+        case "sad": return .sad
+        case "irritated": return .irritated
+        case "anxious": return .anxious
+        case "excited": return .excited
+        case "drained": return .drained
+        case "confident": return .confident
+        case "peaceful": return .peaceful
+        default: return .indifferent
+        }
+    }
+}
+
+// MARK: - Quick Health Record Bar
+
+struct QuickRecordBar: View {
+    @State private var counts = HealthKitService.QuickRecordCounts()
+    @State private var showCaffeineMenu = false
+    @State private var showWaterMenu = false
+    @State private var showHeadacheMenu = false
+    @State private var feedbackItem: String?
+
+    struct RecordItem: Identifiable {
+        let id: String
+        let emoji: String
+        let label: String
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    // Caffeine
+                    quickButton(emoji: "☕", label: caffeineLabel) {
+                        showCaffeineMenu = true
+                    }
+                    .confirmationDialog("カフェイン量", isPresented: $showCaffeineMenu) {
+                        Button("コーヒー (80mg)") { saveCaffeine(80) }
+                        Button("濃いコーヒー (120mg)") { saveCaffeine(120) }
+                        Button("お茶 (30mg)") { saveCaffeine(30) }
+                        Button("エナジードリンク (150mg)") { saveCaffeine(150) }
+                        Button("キャンセル", role: .cancel) {}
+                    }
+
+                    // Water
+                    quickButton(emoji: "💧", label: waterLabel) {
+                        showWaterMenu = true
+                    }
+                    .confirmationDialog("飲水量", isPresented: $showWaterMenu) {
+                        Button("コップ1杯 (200ml)") { saveWater(200) }
+                        Button("ペットボトル半分 (250ml)") { saveWater(250) }
+                        Button("ペットボトル1本 (500ml)") { saveWater(500) }
+                        Button("キャンセル", role: .cancel) {}
+                    }
+
+                    // Toothbrushing
+                    quickButton(emoji: "🪥", label: toothLabel) {
+                        saveToothbrushing()
+                    }
+
+                    // Handwashing
+                    quickButton(emoji: "🧼", label: handwashLabel) {
+                        saveHandwashing()
+                    }
+
+                    // Headache
+                    quickButton(emoji: "🤕", label: headacheLabel) {
+                        showHeadacheMenu = true
+                    }
+                    .confirmationDialog("頭痛の程度", isPresented: $showHeadacheMenu) {
+                        Button("軽度") { saveHeadache(1) }
+                        Button("中度") { saveHeadache(2) }
+                        Button("重度") { saveHeadache(3) }
+                        Button("キャンセル", role: .cancel) {}
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+
+            // Feedback
+            if let item = feedbackItem {
+                Label("\(item) を記録しました", systemImage: "checkmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+                    .transition(.opacity)
+            }
+        }
+        .task { await refreshCounts() }
+    }
+
+    // MARK: - Labels with counts
+
+    private var caffeineLabel: String {
+        counts.caffeineMg > 0 ? "×\(Int(counts.caffeineMg))mg" : "カフェイン"
+    }
+
+    private var waterLabel: String {
+        counts.waterMl > 0 ? "×\(Int(counts.waterMl))ml" : "飲水"
+    }
+
+    private var toothLabel: String {
+        counts.toothbrushCount > 0 ? "×\(counts.toothbrushCount)" : "歯磨き"
+    }
+
+    private var handwashLabel: String {
+        counts.handwashCount > 0 ? "×\(counts.handwashCount)" : "手洗い"
+    }
+
+    private var headacheLabel: String {
+        counts.headacheCount > 0 ? "×\(counts.headacheCount)" : "頭痛"
+    }
+
+    // MARK: - Quick Button
+
+    private func quickButton(emoji: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Text(emoji)
+                    .font(.title3)
+                Text(label)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 56, height: 48)
+            .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Save Actions
+
+    private func saveCaffeine(_ mg: Double) {
+        Task {
+            try? await HealthKitService.shared.saveCaffeine(mg: mg)
+            showFeedback("☕ \(Int(mg))mg")
+            await refreshCounts()
+        }
+    }
+
+    private func saveWater(_ ml: Double) {
+        Task {
+            try? await HealthKitService.shared.saveWater(ml: ml)
+            showFeedback("💧 \(Int(ml))ml")
+            await refreshCounts()
+        }
+    }
+
+    private func saveToothbrushing() {
+        Task {
+            try? await HealthKitService.shared.saveToothbrushing()
+            showFeedback("🪥 歯磨き")
+            await refreshCounts()
+        }
+    }
+
+    private func saveHandwashing() {
+        Task {
+            try? await HealthKitService.shared.saveHandwashing()
+            showFeedback("🧼 手洗い")
+            await refreshCounts()
+        }
+    }
+
+    private func saveHeadache(_ severity: Int) {
+        let labels = ["", "軽度", "中度", "重度"]
+        Task {
+            try? await HealthKitService.shared.saveHeadache(severity: severity)
+            showFeedback("🤕 頭痛(\(labels[severity]))")
+            await refreshCounts()
+        }
+    }
+
+    private func showFeedback(_ text: String) {
+        withAnimation { feedbackItem = text }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation { feedbackItem = nil }
+        }
+    }
+
+    private func refreshCounts() async {
+        counts = (try? await HealthKitService.shared.fetchTodayQuickRecordCounts()) ?? HealthKitService.QuickRecordCounts()
     }
 }
 
